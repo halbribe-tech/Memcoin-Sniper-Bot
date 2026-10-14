@@ -1,14 +1,86 @@
+<div align="center">
+
 # Memecoin Sniper Bot
 
-A Solana memecoin sniper built **filter-first**. It watches new pools appear on pump.fun,
-PumpSwap and Raydium, runs every launch through twelve rug and honeypot checks, paper-trades the
-survivors with disciplined exits, and shows all of it on a live dashboard. It can also send
-alerts to your phone through Telegram.
+**A Solana memecoin sniper built around what it refuses to buy.**
 
-> **Paper mode is the default, and the only mode that trades.** No wallet, no keys, no real
-> funds. A live executor has not been built yet (see [Status](#status)). None of this is
-> financial advice. Most new memecoins go to zero within a day, and this project is built around
-> that assumption.
+It watches pump.fun, PumpSwap and Raydium for new pools, runs every launch through twelve rug and
+honeypot checks, paper-trades the survivors with disciplined exits, and shows all of it on a live
+dashboard.
+
+![Solana](https://img.shields.io/badge/Solana-mainnet-9945FF?logo=solana&logoColor=white)
+![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white)
+![Node](https://img.shields.io/badge/node-%E2%89%A522-339933?logo=node.js&logoColor=white)
+![Next.js](https://img.shields.io/badge/Next.js-15-000000?logo=nextdotjs&logoColor=white)
+![Mode](https://img.shields.io/badge/mode-paper%20by%20default-2ea44f)
+![License](https://img.shields.io/badge/license-MIT-blue)
+
+![The Live page: new pools as they are detected, each with a pass or fail pill for every filter](screenshots/live.png)
+
+<sub>Every screenshot comes from the built-in synthetic feed, which generates fake launches.
+None of the numbers are real trading results.</sub>
+
+</div>
+
+> [!IMPORTANT]
+> **Paper mode is the default, and it is the only mode that trades.** It needs no wallet, no keys
+> and no real funds. A live executor has not been built yet (see [Roadmap](#roadmap)). None of
+> this is financial advice. Most new memecoins go to zero within a day, and this project is built
+> around that assumption.
+
+If this project is useful to you, or it just taught you how rugs work, a ⭐ helps other people
+find it.
+
+<details>
+<summary><b>Contents</b></summary>
+
+- [Highlights](#highlights)
+- [Screenshots](#screenshots)
+- [Why filter-first](#why-filter-first)
+- [How it works](#how-it-works): the pipeline, the twelve filters, exits and risk
+- [Quick start](#quick-start)
+- [The dashboard](#the-dashboard)
+- [Telegram alerts](#telegram-alerts)
+- [Configuration](#configuration)
+- [Scripts](#scripts) · [Project layout](#project-layout) · [Testing](#testing)
+- [Security](#security)
+- [Roadmap](#roadmap)
+- [FAQ](#faq)
+- [Contributing](#contributing)
+
+</details>
+
+---
+
+## Highlights
+
+- **Twelve filters on every launch.** They run in parallel, and each pool gets a weighted score.
+  Every verdict is stored, so you can later check which filters actually predicted winners.
+- **The sell is tested before the buy.** A 0.01 SOL round trip through Jupiter catches honeypots
+  that let you in but never let you out.
+- **Dev history counts.** A creator whose last twenty tokens went to zero is rejected before they
+  can make it twenty-one.
+- **Paper trading that doesn't flatter you.** It enters at Jupiter's executable quote, and it
+  models slippage from pool depth, failed fills, MEV sandwich losses and Jito tips.
+- **Exits that run on their own.** A take-profit ladder, a stop-loss, a trailing stop, a time
+  exit, and a rug watcher that force-sells when liquidity is pulled.
+- **A circuit breaker for bad days.** Daily and weekly drawdown limits, plus a losing-streak
+  limit, halt new entries while exits keep running.
+- **A live dashboard with seven pages,** filter presets, and a backtester that replays stored
+  pools through any preset.
+- **Telegram alerts** for buys, sells, rugs, halts and a daily P&L report.
+- **Runs without any API key.** The synthetic feed exercises the whole pipeline on fake launches,
+  rugs included.
+- **Costs nothing until you switch it on.** The bot starts OFF and does not touch the RPC
+  provider until you press the button.
+
+## Screenshots
+
+| Open positions with live P&L | Analytics: which filters predict winners |
+| --- | --- |
+| ![Open paper positions with live P&L and take-profit ladder progress](screenshots/positions.png) | ![Analytics: win rate, profit factor and per-filter results](screenshots/analytics.png) |
+| **Stats: results by window, DEX and close reason** | **Filters: toggle, tune and save presets** |
+| ![Stats: bankroll over time, top winner and loser, results by DEX and by close reason](screenshots/stats.png) | ![The Filters page with the Safe Sniper preset active](screenshots/filters.png) |
 
 ---
 
@@ -79,11 +151,11 @@ analytics page can show which filters actually predict winners.
 - **Stop-loss** at -40%, a **trailing stop** that arms after +200%, and a **time exit** for
   positions that never move.
 - **Real prices**: a paper trade on a real pool enters at what a real buy of that size would pay
-  (Jupiter's executable quote), and only when Jupiter's price index agrees within -20%/+25% — an
-  index 114× too high once cost a whole position. It is then marked and sold at the index,
-  polled every 3 seconds; a move of 3× or more in one poll is held until the next poll confirms
-  it, so one bad tick cannot fire a take-profit or a stop. Only synthetic-feed pools use the
-  price simulator.
+  (Jupiter's executable quote), and only when Jupiter's price index agrees within -20%/+25%. An
+  index 114× too high once cost a whole position. After entry, the position is marked and sold at
+  the index, polled every 3 seconds. A move of 3× or more in one poll is held until the next poll
+  confirms it, so one bad tick cannot fire a take-profit or a stop. Only synthetic-feed pools use
+  the price simulator.
 - **Rug watcher**: reads each open position's liquidity from the same feed and force-sells when it
   drops sharply (`RUG_DETECTION_LP_DROP_PCT`).
 - **Evaluation delay**: a new pool is judged `EVAL_DELAY_SEC` (default 90) after it appears. At
@@ -132,16 +204,19 @@ pnpm dev:dashboard    # http://localhost:3000
 **The bot starts off.** Until you press **Bot OFF → ON** in the dashboard header, the engine does
 not even connect to the RPC provider: no pools are detected, filtered or traded, and no Helius
 credits are spent. Every restart turns it off again. Pressing it off unsubscribes and stops new
-entries; open positions keep their take-profits, stop-losses and rug watch, none of which use RPC.
-The **RPC** counter next to the button is every request the engine has sent since it started —
-roughly the credits spent. The Backtest page is the one other thing that spends them: each replayed
-pool runs the preset's filters against the RPC, even while the bot is off.
+entries. Open positions keep their take-profits, stop-losses and rug watch, none of which use RPC.
+The **RPC** counter next to the button is every request the engine has sent since it started,
+which is roughly the credits spent. The Backtest page is the one other thing that spends them:
+each replayed pool runs the preset's filters against the RPC, even while the bot is off.
+
+## The dashboard
 
 | Page | What it shows |
 | --- | --- |
 | **Live** | new pools as they are detected, with a pass/fail pill per filter |
 | **Positions** | open paper positions, live P&L, TP ladder progress |
 | **History** | every closed trade and why it closed |
+| **Stats** | trade results over a window from 10 minutes to all time, broken down by DEX and by close reason |
 | **Analytics** | win rate, profit factor, per-filter lift, results by DEX, liquidity and hour |
 | **Filters** | toggle and tune filters, save and activate presets |
 | **Backtest** | replay stored pools through any preset without touching live trading |
@@ -213,8 +288,9 @@ for a real one.
 | `STOP_LOSS_PCT` | `-40` | hard stop |
 | `FILTER_MIN_FILTER_SCORE` | `70` | minimum weighted score to buy |
 | `FILTER_LIQUIDITY_MIN_USD` / `_MAX_USD` | `5000` / `500000` | liquidity window |
+| `EVAL_DELAY_SEC` | `90` | how long a new pool waits before it is judged |
 | `DAILY_DRAWDOWN_LIMIT_PCT` | `10` | daily loss that halts entries |
-| `ENABLE_PUMPFUN`, `ENABLE_RAYDIUM_AMM`, … | | which DEXes to watch |
+| `ENABLE_PUMPFUN`, `ENABLE_PUMPSWAP`, `ENABLE_RAYDIUM_AMM` | | which DEXes to watch |
 
 Every value is validated at startup, and the engine refuses to start with a clear message rather
 than run on a typo.
@@ -253,7 +329,19 @@ packages/
   shared/                 types shared by engine and dashboard
 docker-compose.yml        Redis + Postgres for local development
 MEMECOIN_SNIPER_PLAN.md   the full design and phase plan
+FILTER_QUALITY_PLAN.md    how the filters get validated against labelled launches
 ```
+
+## Testing
+
+```bash
+pnpm typecheck
+pnpm test
+```
+
+121 tests across the filters, parsers, exit engine, rug watcher, trader, position store and
+Telegram client. They run on Node's built-in test runner and need no network, database or API
+key. A `.env` copied from `.env.example` is all they read.
 
 ## Security
 
@@ -266,7 +354,9 @@ MEMECOIN_SNIPER_PLAN.md   the full design and phase plan
 - The Postgres password in `docker-compose.yml` is a local development default. Change it if the
   database is ever reachable from outside your machine.
 
-## Status
+---
+
+## Roadmap
 
 | Phase | State |
 | --- | --- |
@@ -279,5 +369,110 @@ MEMECOIN_SNIPER_PLAN.md   the full design and phase plan
 | 5 · Paper validation: 2–3 weeks of continuous paper trading | ⏳ next |
 | 6 · Live mode: encrypted keypair, Jito bundles, confirmation UI | ⛔ not started |
 
-Live trading will only be built after the paper results meet the validation criteria in
-[`MEMECOIN_SNIPER_PLAN.md`](MEMECOIN_SNIPER_PLAN.md).
+Live trading will only be built after paper trading clears every one of these
+([`MEMECOIN_SNIPER_PLAN.md`](MEMECOIN_SNIPER_PLAN.md) §8):
+
+| Over at least 2 weeks of paper trading | Required |
+| --- | --- |
+| Total trades | more than 200 |
+| Win rate | above 15% |
+| Average win ÷ average loss | above 3.0 |
+| Sharpe ratio | above 1.5 |
+| Maximum drawdown | below 30% |
+| Trades that returned more than 5× | at least 5 |
+| Worst single day | no loss over 20% |
+
+If any of them fails, the filters get tuned and the paper run starts again.
+
+---
+
+## FAQ
+
+<details>
+<summary><b>Can it trade real money?</b></summary>
+
+No. Paper mode is the only mode that trades. `MODE=live` refuses to start without
+`ENABLE_LIVE_TRADING=true` and a keypair path, and even with both set there is no live executor
+to send a transaction. That will stay true until the paper results clear the
+[validation gate](#roadmap).
+
+</details>
+
+<details>
+<summary><b>Does it make money?</b></summary>
+
+Nobody knows yet, and that is the honest answer. Finding out is what phase 5 is for. Results from
+the synthetic feed say nothing about real markets: it exists to exercise the code, not to predict
+returns.
+
+</details>
+
+<details>
+<summary><b>What do I need to pay for?</b></summary>
+
+Nothing, to try it. The synthetic feed needs no key at all. To watch real launches you need a
+Helius API key, and the free plan is enough to start. Helius is the only key the engine uses.
+Jupiter's quote API and DexScreener are called without one.
+
+</details>
+
+<details>
+<summary><b>How many Helius credits will it use?</b></summary>
+
+None while the bot is off, which is how it starts every time. While it is on, the **RPC** counter
+in the dashboard header shows every request sent since startup. Running a backtest spends credits
+too, even with the bot off.
+
+</details>
+
+<details>
+<summary><b>Why does it wait 90 seconds before judging a pool?</b></summary>
+
+At the moment a pool is created there is no honeypot quote, no trading volume and no social
+profile yet, so several filters could only say "unknown". Judging it a little later means each
+filter gets a real answer. Change it with `EVAL_DELAY_SEC`.
+
+</details>
+
+<details>
+<summary><b>Can I add another DEX?</b></summary>
+
+Yes. Each DEX has a parser in `apps/engine/src/feeds/parsers/` that turns its pool-creation logs
+into one common `PoolEvent`, and its program id is listed in `program-ids.ts`. Raydium CLMM,
+Raydium Launchpad, Meteora and Orca already have program ids and switches in `.env`, but no
+parsers yet. Turning one on subscribes to its logs and then skips every one of them, so leave them
+off for now. Writing those parsers is a good first contribution.
+
+</details>
+
+---
+
+## Contributing
+
+Issues and pull requests are welcome. The most useful contributions are:
+
+- **Labelled launches.** `pnpm fixtures:label` labels stored pools by what actually happened on
+  chain. More labelled rugs and good launches make the filters measurably better.
+- **New DEX parsers** (see the [FAQ](#faq)).
+- **Filter ideas**, especially ones with data showing they separate rugs from good launches.
+
+Before opening a pull request, run `pnpm typecheck && pnpm test`.
+
+## Disclaimer
+
+This software is for research and education. It is not financial advice, and nothing in it
+promises a profit. Trading memecoins is extremely risky, and most of them go to zero. If you build
+live trading on top of this code, you are responsible for what it does with your money.
+
+## License
+
+[MIT](LICENSE)
+
+---
+
+<div align="center">
+
+**If this saved you from a rug, or just made one easier to understand, consider leaving a ⭐.**
+**It is the main way other people find the project.**
+
+</div>
