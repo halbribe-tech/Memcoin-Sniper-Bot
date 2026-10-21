@@ -4,7 +4,7 @@
 
 **A Solana memecoin sniper built around what it refuses to buy.**
 
-It watches pump.fun, PumpSwap and Raydium for new pools, runs every launch through twelve rug and
+It watches pump.fun, PumpSwap and Raydium for new pools, runs every launch through thirteen rug and
 honeypot checks, paper-trades the survivors with disciplined exits, and shows all of it on a live
 dashboard.
 
@@ -37,7 +37,7 @@ find it.
 - [Highlights](#highlights)
 - [Screenshots](#screenshots)
 - [Why filter-first](#why-filter-first)
-- [How it works](#how-it-works): the pipeline, the twelve filters, exits and risk
+- [How it works](#how-it-works): the pipeline, the thirteen filters, exits and risk
 - [Quick start](#quick-start)
 - [The dashboard](#the-dashboard)
 - [Telegram alerts](#telegram-alerts)
@@ -54,7 +54,7 @@ find it.
 
 ## Highlights
 
-- **Twelve filters on every launch.** They run in parallel, and each pool gets a weighted score.
+- **Thirteen filters on every launch.** They run in parallel, and each pool gets a weighted score.
   Every verdict is stored, so you can later check which filters actually predicted winners.
 - **The sell is tested before the buy.** A 0.01 SOL round trip through Jupiter catches honeypots
   that let you in but never let you out.
@@ -106,7 +106,7 @@ buy** and **when you sell**:
                                                    │ waits EVAL_DELAY_SEC (90s)
                                                    ▼
                                     ┌─────────────────────────────┐
-                                    │ Filter orchestrator         │  12 filters in parallel, weighted score
+                                    │ Filter orchestrator         │  13 filters in parallel, weighted score
                                     │  any hard fail  → reject    │
                                     │  score < min    → reject    │
                                     └──────────────┬──────────────┘
@@ -123,7 +123,7 @@ buy** and **when you sell**:
                  Postgres (history) · Redis (streams) · Socket.IO ─▶ Dashboard · Telegram
 ```
 
-### The twelve filters
+### The thirteen filters
 
 | Filter | Rejects when | Weight |
 | --- | --- | --- |
@@ -134,6 +134,7 @@ buy** and **when you sell**:
 | `lp-locked` | liquidity is neither burned nor locked | 10 |
 | `top-holders` | the largest holder, or the top ten together, hold too much | 8 |
 | `bundled-launch` | the first block was bought by wallets funded from one source | 8 |
+| `curve-momentum` | a pump.fun price still sits within 10% of the curve's start price when the filters run, so nobody has net-bought it (`FILTER_CURVE_GAIN_MIN_PCT`) | 6 |
 | `insider-detection` | the creator was funded by a flagged wallet | 6 |
 | `liquidity-min` | liquidity is too thin to exit, or too deep to still be early | 5 |
 | `volume-velocity` | buy/sell flow and unique buyers look inorganic | 4 |
@@ -314,7 +315,7 @@ apps/
   engine/                 Node + TypeScript: the bot
     src/
       feeds/              Helius log stream, per-DEX parsers, synthetic feed
-      filters/            the twelve filters and the orchestrator
+      filters/            the thirteen filters and the orchestrator
       execution/          paper executor, price simulator, trader
       exits/              exit engine (TP / SL / trailing / time), rug watcher
       risk/               drawdown circuit breaker

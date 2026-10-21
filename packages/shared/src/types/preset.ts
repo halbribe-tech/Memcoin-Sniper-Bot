@@ -18,6 +18,7 @@ export interface FilterConfigDelta {
     honeypotSimRequired?: boolean;
     maxSellTaxPct?: number;
     bundledLaunchReject?: boolean;
+    curveGainMinPct?: number;
     minFilterScore?: number;
   };
 }
@@ -110,6 +111,7 @@ export const BUILT_IN_PRESETS: ReadonlyArray<{
         "social-signal": false,
         "volume-velocity": false,
         "anti-sniper-war": false,
+        "curve-momentum": false,
       },
       thresholds: {
         minFilterScore: 0,

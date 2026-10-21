@@ -16,6 +16,8 @@ import { filterConfig } from "../config/filter-config.js";
 
 const log = childLogger("orchestrator");
 
+const NOT_RUN = "not run: a filter without RPC cost already rejected the pool";
+
 interface OrchestratorEvents {
   verdict: (verdict: OrchestratorVerdict) => void;
   "verdict-backtest": (verdict: OrchestratorVerdict) => void;
@@ -64,6 +66,11 @@ export class FilterOrchestrator extends EventEmitter {
     };
   }
 
+  resetStats(): void {
+    this.snipes = 0;
+    this.rejects = 0;
+  }
+
   setLive(on: boolean): void {
     this.live = on;
   }
@@ -101,15 +108,24 @@ export class FilterOrchestrator extends EventEmitter {
     };
 
     const filters = this.activeFilters(cfg);
-    const results = await Promise.all(
-      filters.map(async (f) => {
-        try {
-          return await f.evaluate(pool, ctx);
-        } catch (err) {
-          return makeResult(f.id, "error", `unhandled: ${(err as Error).message}`);
-        }
-      }),
-    );
+    const run = (f: Filter) =>
+      f.evaluate(pool, ctx).catch((err: Error) => makeResult(f.id, "error", `unhandled: ${err.message}`));
+
+    // Any fail rejects, and the free filters reject ~94% of launches on their
+    // own. Running the RPC filters for those anyway queued every pool behind
+    // the rate limit: entries landed 3-7 minutes after launch, past the move.
+    const byId = new Map<string, FilterResult>();
+    const free = filters.filter((f) => !f.usesRpc);
+    for (const [i, r] of (await Promise.all(free.map(run))).entries()) byId.set(free[i]!.id, r);
+    const rejected = [...byId.values()].some((r) => r.status === "fail");
+    for (const f of filters.filter((f) => f.usesRpc)) {
+      if (rejected) byId.set(f.id, makeResult(f.id, "skip", NOT_RUN, { metadata: { notRun: true } }));
+    }
+    if (!rejected) {
+      const paid = filters.filter((f) => f.usesRpc);
+      for (const [i, r] of (await Promise.all(paid.map(run))).entries()) byId.set(paid[i]!.id, r);
+    }
+    const results = filters.map((f) => byId.get(f.id)!);
 
     const verdict = this.computeVerdict(pool, filters, results, cfg, Date.now() - start);
 
@@ -221,7 +237,7 @@ export class FilterOrchestrator extends EventEmitter {
           decidedAt: new Date(verdict.decidedAt),
         },
       }),
-      ...results.map((r) =>
+      ...results.filter((r) => !r.metadata?.notRun).map((r) =>
         prisma.filterResult.create({
           data: {
             poolId: pool.id,

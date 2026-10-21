@@ -11,6 +11,7 @@ function ownerOf(info: AccountInfo<Buffer | ParsedAccountData> | null | undefine
 
 export const topHoldersFilter: Filter = {
   id: "top-holders",
+  usesRpc: true,
   weight: 8,
   enabled: true,
   async evaluate(pool, ctx) {

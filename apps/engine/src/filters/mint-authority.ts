@@ -4,6 +4,7 @@ import { makeResult } from "./types.js";
 
 export const mintAuthorityFilter: Filter = {
   id: "mint-authority",
+  usesRpc: true,
   weight: 10,
   enabled: true,
   async evaluate(pool, ctx) {

@@ -35,6 +35,17 @@ export class PnlTracker {
     this.totalInvestedUsd += investedUsd;
   }
 
+  reset(): void {
+    this.wins = 0;
+    this.losses = 0;
+    this.totalWinPct = 0;
+    this.totalLossPct = 0;
+    this.totalGrossWinUsd = 0;
+    this.totalGrossLossUsd = 0;
+    this.totalTrades = 0;
+    this.totalInvestedUsd = 0;
+  }
+
   private onClose(p: Pick<Position, "realizedPnlUsd" | "entrySizeUsd">): void {
     this.totalTrades++;
     const pct = (p.realizedPnlUsd / p.entrySizeUsd) * 100;

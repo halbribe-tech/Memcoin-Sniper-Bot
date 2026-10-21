@@ -64,6 +64,8 @@ const envSchema = z.object({
   STOP_LOSS_PCT: z.coerce.number().negative(),
   TRAILING_STOP_PCT: z.coerce.number().positive(),
   TRAILING_STOP_ACTIVATION_PCT: z.coerce.number().positive(),
+  // after TP1 the stop moves to the entry price
+  BREAKEVEN_AFTER_TP1: boolFromString.default(true),
   TIME_EXIT_MIN: z.coerce.number().positive(),
   RUG_DETECTION_LP_DROP_PCT: z.coerce.number().positive().max(100),
 
@@ -84,6 +86,8 @@ const envSchema = z.object({
   FILTER_HONEYPOT_SIM_REQUIRED: boolFromString,
   FILTER_MAX_SELL_TAX_PCT: z.coerce.number().min(0).max(100),
   FILTER_BUNDLED_LAUNCH_REJECT: boolFromString,
+  // % a pump.fun price must sit over the curve start; 10% ≈ 1.5 SOL net bought
+  FILTER_CURVE_GAIN_MIN_PCT: z.coerce.number().min(0).default(10),
   FILTER_MIN_FILTER_SCORE: z.coerce.number().min(0).max(100),
 
   // Execution
@@ -94,6 +98,9 @@ const envSchema = z.object({
 
   // DEX sources
   ENABLE_PUMPFUN: boolFromString,
+  // pump.fun launches dropped before any filter or RPC call
+  PUMPFUN_SKIP_MAYHEM: boolFromString.default(true),
+  PUMPFUN_SOL_PAIRS_ONLY: boolFromString.default(true),
   ENABLE_PUMPSWAP: boolFromString,
   ENABLE_RAYDIUM_AMM: boolFromString,
   ENABLE_RAYDIUM_CLMM: boolFromString,

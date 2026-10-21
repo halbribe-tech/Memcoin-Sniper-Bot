@@ -82,6 +82,14 @@ export class DrawdownCircuit extends EventEmitter {
     }
   }
 
+  /** Forget every loss and lift any halt: the stats reset. */
+  reset(): void {
+    this.stop();
+    this.history.length = 0;
+    this.consecutiveLosses = 0;
+    this.halt = null;
+  }
+
   /** Public gate. Called by Trader before opening a position. */
   canTrade(): { allowed: boolean; reason?: string } {
     if (!this.halt) return { allowed: true };

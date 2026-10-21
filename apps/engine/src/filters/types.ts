@@ -43,6 +43,8 @@ export interface SyntheticMock {
 export interface Filter {
   readonly id: FilterId;
   readonly weight: number;
+  // spends Helius RPC credits; runs only once every free filter has passed
+  readonly usesRpc?: boolean;
   enabled: boolean;
   evaluate(pool: PoolEvent, ctx: FilterContext): Promise<FilterResult>;
 }

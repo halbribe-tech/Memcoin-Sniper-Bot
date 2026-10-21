@@ -49,6 +49,7 @@ export interface ServerToClientEvents {
   "position:closed": (e: PositionClosedEvent) => void;
   "bankroll:snapshot": (snap: BankrollSnapshot) => void;
   "preset:changed": (preset: { activeName: string | null }) => void;
+  "stats:reset": () => void;
 }
 
 export interface ClientToServerEvents {
@@ -84,6 +85,7 @@ export interface ClientToServerEvents {
     ack: (result: { ok: boolean; summary?: BacktestSummary; error?: string }) => void,
   ) => void;
   "bot:set": (on: boolean, ack: (result: { ok: boolean; botOn: boolean; error?: string }) => void) => void;
+  "stats:reset": (ack: (result: { ok: boolean; error?: string }) => void) => void;
 }
 
 export interface SystemStatus {
@@ -127,6 +129,7 @@ export class SocketServer {
   private readonly pnl: PnlTracker;
   private readonly circuit: DrawdownCircuit;
   private readonly bot: BotSwitch;
+  private readonly resetStats: () => Promise<void>;
   private readonly startedAt = Date.now();
   private statusInterval: NodeJS.Timeout | null = null;
 
@@ -137,12 +140,14 @@ export class SocketServer {
     pnl: PnlTracker,
     circuit: DrawdownCircuit,
     bot: BotSwitch,
+    resetStats: () => Promise<void>,
   ) {
     this.detector = detector;
     this.orchestrator = orchestrator;
     this.positionStore = positionStore;
     this.pnl = pnl;
     this.circuit = circuit;
+    this.resetStats = resetStats;
     this.bot = bot;
 
     this.http = createServer((req, res) => {
@@ -282,6 +287,22 @@ export class SocketServer {
         }
         // every open dashboard flips at once, not on the next 2s tick
         this.io.emit("system:status", this.buildStatus());
+      });
+
+      socket.on("stats:reset", async (ack) => {
+        const reply = typeof ack === "function" ? ack : () => undefined;
+        try {
+          await this.resetStats();
+          reply({ ok: true });
+        } catch (err) {
+          log.error({ err }, "stats reset failed");
+          reply({ ok: false, error: (err as Error).message });
+          return;
+        }
+        // every open dashboard drops what it has cached
+        this.io.emit("stats:reset");
+        this.io.emit("system:status", this.buildStatus());
+        this.io.emit("bankroll:snapshot", this.pnl.buildSnapshot());
       });
 
       socket.on("disconnect", (reason) => {

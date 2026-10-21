@@ -45,6 +45,8 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
     );
     socket.on("position:closed", ({ position }) => positionClosed(position));
     socket.on("bankroll:snapshot", setBankroll);
+    // every page refetches on load, so a reload drops all cached results at once
+    socket.on("stats:reset", () => window.location.reload());
 
     if (socket.connected) onConnect();
 
@@ -58,6 +60,7 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
       socket.off("position:update");
       socket.off("position:closed");
       socket.off("bankroll:snapshot");
+      socket.off("stats:reset");
     };
   }, [
     addPool,

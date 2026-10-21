@@ -51,6 +51,11 @@ export class RugWatcher {
     this.baselines.clear();
   }
 
+  resetStats(): void {
+    this.baselines.clear();
+    this.detections = 0;
+  }
+
   getStats() {
     return { tracked: this.baselines.size, detections: this.detections };
   }

@@ -9,6 +9,7 @@ import { devWalletFilter } from "./dev-wallet.js";
 import { bundledLaunchFilter } from "./bundled-launch.js";
 import { insiderDetectionFilter } from "./insider-detection.js";
 import { antiSniperWarFilter } from "./anti-sniper-war.js";
+import { curveMomentumFilter } from "./curve-momentum.js";
 import { volumeVelocityFilter } from "./volume-velocity.js";
 import { socialSignalFilter } from "./social-signal.js";
 
@@ -23,6 +24,7 @@ export const allFilters: Filter[] = [
   bundledLaunchFilter,
   insiderDetectionFilter,
   antiSniperWarFilter,
+  curveMomentumFilter,
   volumeVelocityFilter,
   socialSignalFilter,
 ];

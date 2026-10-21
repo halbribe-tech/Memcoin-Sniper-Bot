@@ -20,6 +20,7 @@ export interface DexScreenerPair {
   pairAddress: string;
   baseToken: { address: string; name?: string; symbol?: string };
   quoteToken: { address: string; symbol?: string };
+  priceNative?: string;
   priceUsd?: string;
   liquidity?: { usd?: number; base?: number; quote?: number };
   volume?: { h24?: number; h6?: number; h1?: number; m5?: number };

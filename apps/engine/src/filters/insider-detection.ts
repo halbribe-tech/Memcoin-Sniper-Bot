@@ -62,6 +62,7 @@ async function findFunder(
 
 export const insiderDetectionFilter: Filter = {
   id: "insider-detection",
+  usesRpc: true,
   weight: 6,
   enabled: true,
   async evaluate(pool, ctx) {

@@ -27,6 +27,7 @@ const THRESHOLD_FIELDS: Array<{
   { key: "top10HoldersMaxPct", label: "Max top-10 holders", min: 10, max: 100, step: 1, suffix: "%" },
   { key: "devRugRateMax", label: "Dev rug rate max", min: 0, max: 1, step: 0.05, isPct: true },
   { key: "maxSellTaxPct", label: "Max sell tax", min: 0, max: 100, step: 1, suffix: "%" },
+  { key: "curveGainMinPct", label: "Min gain over curve start", min: 0, max: 200, step: 5, suffix: "%" },
 ];
 
 const TOGGLE_FIELDS: Array<{

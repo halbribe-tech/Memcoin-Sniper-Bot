@@ -52,7 +52,9 @@ function setup(openedAgoMs: number, price: number | null) {
   const engine = new ExitEngine(store, 1, feed);
   store.add(position(openedAgoMs), undefined, {} as Trade);
   const tick = () => (engine as unknown as { tick(): void }).tick();
-  return { store, feed, tick };
+  const setPrice = (priceUsd: number) =>
+    prices.set("MINT", { priceUsd, liquidityUsd: 50_000, decimals: 6, at: Date.now() });
+  return { store, feed, tick, setPrice };
 }
 
 describe("exits on market prices", () => {
@@ -80,6 +82,26 @@ describe("exits on market prices", () => {
     assert.equal(p?.status, "partial");
     assert.equal(p?.remainingTokens, 75);
     assert.ok(store.getStats().realizedPnlUsd > 0);
+  });
+
+  test("before TP1 a dip below entry is held; after TP1 the stop sits at break-even", async () => {
+    const { store, feed, tick, setPrice } = setup(MIN, 0.95);
+    await feed.poll();
+    tick();
+    assert.equal(store.count(), 1, "-5% is far from the -40% stop");
+
+    setPrice(1.6);
+    await feed.poll();
+    tick();
+    assert.equal(store.list()[0]?.status, "partial");
+
+    setPrice(0.99);
+    await feed.poll();
+    tick();
+    assert.equal(store.count(), 0);
+    const closed = store.recentlyClosed(1)[0];
+    assert.equal(closed?.closeReason, "stop-loss");
+    assert.ok((closed?.realizedPnlUsd ?? 0) > 0, "TP1's profit outweighs the break-even exit");
   });
 
   test("an unpriced position waits inside its window", () => {

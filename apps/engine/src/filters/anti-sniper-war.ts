@@ -10,6 +10,7 @@ const CACHE_TTL_MS = 60_000;
 
 export const antiSniperWarFilter: Filter = {
   id: "anti-sniper-war",
+  usesRpc: true,
   weight: 4,
   enabled: true,
   async evaluate(pool, ctx) {

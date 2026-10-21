@@ -73,6 +73,13 @@ export class ExitEngine {
     this.timer = null;
   }
 
+  resetStats(): void {
+    this.unpricedSince.clear();
+    this.rugBroadcasts = 0;
+    this.partialFills = 0;
+    this.fullCloses = 0;
+  }
+
   getStats() {
     return {
       timeScale: this.timeScale,
@@ -154,8 +161,9 @@ export class ExitEngine {
       return { kind: "full-close", reason: "rug-pull" };
     }
 
-    // 2. Stop loss
-    if (p.unrealizedPnlPct <= p.stopLossPct) {
+    // 2. Stop loss — at break-even once TP1 has sold, so a winner cannot turn
+    // into a loss (one rose to +65%, took TP1, then fell to the -40% stop)
+    if (p.unrealizedPnlPct <= effectiveStopPct(p)) {
       return { kind: "full-close", reason: "stop-loss" };
     }
 
@@ -242,4 +250,9 @@ export class ExitEngine {
 
 export function defaultStopLossPct(): number {
   return env.STOP_LOSS_PCT;
+}
+
+/** The stop in force: the entry price after TP1, the configured stop before it. */
+export function effectiveStopPct(p: Pick<Position, "stopLossPct" | "tpLadder">): number {
+  return env.BREAKEVEN_AFTER_TP1 && p.tpLadder[0]?.hit ? 0 : p.stopLossPct;
 }

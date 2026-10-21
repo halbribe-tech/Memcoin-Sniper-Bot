@@ -1,3 +1,12 @@
 packages:
   - "apps/*"
   - "packages/*"
+
+onlyBuiltDependencies:
+  - "@prisma/client"
+  - "@prisma/engines"
+  - bufferutil
+  - esbuild
+  - prisma
+  - sharp
+  - utf-8-validate

@@ -20,6 +20,7 @@ import { ExitEngine } from "./exits/exit-engine.js";
 import { RugWatcher } from "./exits/rug-watcher.js";
 import { DrawdownCircuit } from "./risk/drawdown-circuit.js";
 import { bootstrapPresets } from "./state/filter-presets.js";
+import { wipeStoredStats } from "./state/reset-stats.js";
 import { createAlerter } from "./alerts/index.js";
 
 async function main() {
@@ -109,8 +110,12 @@ async function main() {
   // quote, the volume and the socials do not exist yet, so several filters
   // could only answer "unknown" and no strict preset could ever pass.
   // Synthetic pools carry their answers and are judged at once.
+  // Bumped by a stats reset: a pool detected before it is not judged after it.
+  let statsGeneration = 0;
   detector.on("pool", (event) => {
+    const generation = statsGeneration;
     const judge = () => {
+      if (generation !== statsGeneration) return;
       trader.cachePool(event);
       void orchestrator.evaluate(event);
     };
@@ -121,8 +126,9 @@ async function main() {
 
   orchestrator.on("verdict", (v) => {
     void publishVerdict(v);
+    // every verdict takes its pool out of the cache, so rejects cannot pile up
+    const pool = trader.resolvePool(v);
     if (v.decision === "snipe") {
-      const pool = trader.resolvePool(v);
       if (pool) void trader.handleVerdict(v, pool);
       else logger.warn({ poolAddress: v.poolAddress }, "snipe verdict missing pool cache");
     }
@@ -167,7 +173,24 @@ async function main() {
     trader,
   });
 
-  const socketServer = new SocketServer(detector, orchestrator, positionStore, pnl, circuit, bot);
+  // Back to a fresh bankroll: only with the bot off, so no buy lands mid-wipe.
+  const resetStats = async () => {
+    if (bot.isOn()) throw new Error("turn the bot off first");
+    if (trader.isEntering()) throw new Error("a buy is still being priced — try again in a few seconds");
+    await wipeStoredStats();
+    statsGeneration++;
+    positionStore.reset();
+    pnl.reset();
+    circuit.reset();
+    trader.resetStats();
+    exitEngine.resetStats();
+    rugWatcher.resetStats();
+    detector.resetStats();
+    orchestrator.resetStats();
+    logger.warn({ startingBalanceUsd: env.PAPER_STARTING_BALANCE_USD }, "stats reset from dashboard");
+  };
+
+  const socketServer = new SocketServer(detector, orchestrator, positionStore, pnl, circuit, bot, resetStats);
   await socketServer.start();
 
   logger.info(
@@ -200,6 +223,8 @@ async function main() {
     logger.info(
       {
         pools: ds.parsed,
+        droppedMayhem: ds.skippedMayhem,
+        droppedNotSolPaired: ds.skippedNotSolPaired,
         snipes: os.snipes,
         rejects: os.rejects,
         open: ps.open,

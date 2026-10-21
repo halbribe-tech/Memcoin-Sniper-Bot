@@ -5,6 +5,9 @@ import type { PoolEvent, DexSource } from "@sniperbot/shared";
 import { childLogger } from "../utils/logger.js";
 import { HeliusLogStream, type RawLogEvent } from "./helius-ws.js";
 import { getParser } from "./parsers/index.js";
+import { poolEventFromCreate } from "./parsers/pumpfun.js";
+import { decodePumpCreateEvent, launchSkipReason } from "./parsers/pumpfun-event.js";
+import { env } from "../config/env.js";
 import { publishPoolEvent } from "../state/pool-stream.js";
 import { getPrisma } from "../state/db.js";
 
@@ -37,6 +40,8 @@ export class PoolDetector extends EventEmitter {
   private readonly queue = new PQueue({ concurrency: 5, intervalCap: 20, interval: 1000 });
   private parsedCount = 0;
   private skippedCount = 0;
+  private skippedMayhem = 0;
+  private skippedNotSolPaired = 0;
 
   constructor(stream: HeliusLogStream) {
     super();
@@ -55,8 +60,17 @@ export class PoolDetector extends EventEmitter {
     return {
       parsed: this.parsedCount,
       skipped: this.skippedCount,
+      skippedMayhem: this.skippedMayhem,
+      skippedNotSolPaired: this.skippedNotSolPaired,
       queued: this.queue.size,
     };
+  }
+
+  resetStats(): void {
+    this.parsedCount = 0;
+    this.skippedCount = 0;
+    this.skippedMayhem = 0;
+    this.skippedNotSolPaired = 0;
   }
 
   /** Drop logs still waiting to be parsed — each parse is an RPC call. */
@@ -65,9 +79,38 @@ export class PoolDetector extends EventEmitter {
   }
 
   private handleRawLog(raw: RawLogEvent): void {
+    if (raw.source === "pumpfun") {
+      this.processPumpFunLog(raw);
+      return;
+    }
     const conn = this.stream.getConnection();
     if (!conn) return;
     void this.queue.add(() => this.processLog(raw, conn));
+  }
+
+  /**
+   * A pump.fun launch is read from its CreateEvent in the logs: no fetch, so
+   * it costs no RPC credit and reads every transaction version. Mayhem and
+   * non-SOL coins are dropped here, before any filter spends a request.
+   */
+  private processPumpFunLog(raw: RawLogEvent): void {
+    const created = decodePumpCreateEvent(raw.logs);
+    if (!created) {
+      this.skippedCount++;
+      return;
+    }
+    const reason = launchSkipReason(created, {
+      skipMayhem: env.PUMPFUN_SKIP_MAYHEM,
+      solPairsOnly: env.PUMPFUN_SOL_PAIRS_ONLY,
+    });
+    if (reason) {
+      this.skippedCount++;
+      if (reason === "mayhem") this.skippedMayhem++;
+      else this.skippedNotSolPaired++;
+      log.debug({ mint: created.mint, reason }, "launch dropped");
+      return;
+    }
+    void this.persistAndPublish(poolEventFromCreate(created, raw.signature, raw.receivedAt));
   }
 
   private async processLog(raw: RawLogEvent, conn: Connection): Promise<void> {

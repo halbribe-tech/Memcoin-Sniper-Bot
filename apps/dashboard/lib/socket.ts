@@ -46,6 +46,7 @@ export interface ServerToClientEvents {
   "position:closed": (e: PositionClosedEvent) => void;
   "bankroll:snapshot": (snap: BankrollSnapshot) => void;
   "preset:changed": (msg: { activeName: string | null }) => void;
+  "stats:reset": () => void;
 }
 
 export interface ClientToServerEvents {
@@ -84,6 +85,7 @@ export interface ClientToServerEvents {
     ack: (result: { ok: boolean; summary?: BacktestSummary; error?: string }) => void,
   ) => void;
   "bot:set": (on: boolean, ack: (result: { ok: boolean; botOn: boolean; error?: string }) => void) => void;
+  "stats:reset": (ack: (result: { ok: boolean; error?: string }) => void) => void;
 }
 
 export type SniperSocket = Socket<ServerToClientEvents, ClientToServerEvents>;

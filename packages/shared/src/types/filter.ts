@@ -10,7 +10,8 @@ export type FilterId =
   | "honeypot-sim"
   | "social-signal"
   | "volume-velocity"
-  | "anti-sniper-war";
+  | "anti-sniper-war"
+  | "curve-momentum";
 
 export const FILTER_LABELS: Record<FilterId, string> = {
   "liquidity-min": "Liquidity",
@@ -25,6 +26,7 @@ export const FILTER_LABELS: Record<FilterId, string> = {
   "social-signal": "Social",
   "volume-velocity": "Volume",
   "anti-sniper-war": "Sniper War",
+  "curve-momentum": "Momentum",
 };
 
 export const FILTER_ORDER: FilterId[] = [
@@ -38,6 +40,7 @@ export const FILTER_ORDER: FilterId[] = [
   "bundled-launch",
   "insider-detection",
   "anti-sniper-war",
+  "curve-momentum",
   "volume-velocity",
   "social-signal",
 ];

@@ -9,6 +9,7 @@ import {
   Activity,
   Menu,
   Play,
+  RotateCcw,
   ShieldCheck,
   ShieldOff,
   SlidersHorizontal,
@@ -99,6 +100,7 @@ export function Header() {
               available={connected && status !== null}
               isPaper={isPaper}
             />
+            <ResetStats botOn={status?.botOn ?? false} available={connected && status !== null} />
             {status && (
               <div
                 className={`${PILL} hidden border-border bg-bg-card tabular-nums text-fg-muted sm:flex`}
@@ -293,6 +295,51 @@ function BotToggle({
           {on && !feedLive && <span className="hidden sm:inline"> · no feed</span>}
         </>
       )}
+    </button>
+  );
+}
+
+/**
+ * Back to the starting bankroll: deletes every pool, verdict, position and
+ * trade. Only with the bot off, so no buy lands while it wipes.
+ */
+function ResetStats({ botOn, available }: { botOn: boolean; available: boolean }) {
+  const [pending, setPending] = useState(false);
+
+  const reset = () => {
+    if (
+      !window.confirm(
+        "Reset all stats? Every pool, verdict, position and trade is deleted and the bankroll goes back to its starting balance. Filter presets are kept.",
+      )
+    )
+      return;
+    setPending(true);
+    getSocket()
+      .timeout(15_000)
+      .emit("stats:reset", (err, res) => {
+        setPending(false);
+        if (err) window.alert("Engine did not answer — nothing was reset.");
+        else if (!res.ok) window.alert(`Could not reset: ${res.error ?? "unknown error"}`);
+      });
+  };
+
+  return (
+    <button
+      type="button"
+      onClick={reset}
+      disabled={!available || botOn || pending}
+      title={
+        !available
+          ? "Engine not connected"
+          : botOn
+            ? "Turn the bot off to reset the stats"
+            : "Reset all stats to the starting bankroll"
+      }
+      aria-label="Reset stats"
+      className={`${PILL} gap-1.5 border-border bg-bg-card font-medium text-fg-muted transition-colors hover:border-accent-red/40 hover:text-accent-red disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:border-border disabled:hover:text-fg-muted`}
+    >
+      <RotateCcw className={`h-3.5 w-3.5 ${pending ? "animate-spin" : ""}`} />
+      <span className="hidden sm:inline">Reset</span>
     </button>
   );
 }

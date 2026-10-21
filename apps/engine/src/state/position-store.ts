@@ -58,6 +58,17 @@ export class PositionStore extends EventEmitter {
     }
   }
 
+  /** Forget every position and total: the stats reset, with the bot off. */
+  reset(): void {
+    this.open.clear();
+    this.totalRealizedPnlUsd = 0;
+    this.totalEntryCostUsd = 0;
+    this.totalProceedsUsd = 0;
+    this.wins = 0;
+    this.losses = 0;
+    this.closedRecent = [];
+  }
+
   /** Totals from positions closed in earlier runs, so a restart keeps the bankroll. */
   seedTotals(t: { realizedPnlUsd: number; wins: number; losses: number }): void {
     this.totalRealizedPnlUsd += t.realizedPnlUsd;

@@ -40,9 +40,11 @@ export class Trader {
 
   cachePool(pool: PoolEvent): void {
     this.recentPools.set(pool.poolAddress, { pool, cachedAt: Date.now() });
-    // Sweep entries older than 60s
+    // Every verdict takes its pool out, so this only sweeps pools whose verdict
+    // never came (the bot was switched off mid-evaluation). Filters can run for
+    // 110s under rate limits; a 60s sweep dropped snipes still being judged.
     if (this.recentPools.size > 200) {
-      const cutoff = Date.now() - 60_000;
+      const cutoff = Date.now() - 10 * 60_000;
       for (const [addr, rec] of this.recentPools) {
         if (rec.cachedAt < cutoff) this.recentPools.delete(addr);
       }
@@ -55,6 +57,23 @@ export class Trader {
     if (!rec) return null;
     this.recentPools.delete(verdict.poolAddress);
     return rec.pool;
+  }
+
+  /** A buy past every check is still waiting for its price. */
+  isEntering(): boolean {
+    return this.pendingEntries > 0;
+  }
+
+  resetStats(): void {
+    this.recentPools.clear();
+    this.recentEntries.length = 0;
+    this.skippedFull = 0;
+    this.skippedRate = 0;
+    this.skippedExposure = 0;
+    this.skippedHalted = 0;
+    this.skippedDisabled = 0;
+    this.skippedNoPrice = 0;
+    this.failedFills = 0;
   }
 
   getStats() {

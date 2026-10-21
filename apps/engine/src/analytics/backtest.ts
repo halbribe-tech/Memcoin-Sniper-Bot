@@ -99,6 +99,7 @@ function buildResolvedConfig(d: FilterConfigDelta): ResolvedFilterConfig {
     honeypotSimRequired: t.honeypotSimRequired ?? env.FILTER_HONEYPOT_SIM_REQUIRED,
     maxSellTaxPct: t.maxSellTaxPct ?? env.FILTER_MAX_SELL_TAX_PCT,
     bundledLaunchReject: t.bundledLaunchReject ?? env.FILTER_BUNDLED_LAUNCH_REJECT,
+    curveGainMinPct: t.curveGainMinPct ?? env.FILTER_CURVE_GAIN_MIN_PCT,
     minFilterScore: t.minFilterScore ?? env.FILTER_MIN_FILTER_SCORE,
   };
 }
