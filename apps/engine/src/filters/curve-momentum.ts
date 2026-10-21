@@ -1,14 +1,10 @@
 import type { PoolEvent } from "@sniperbot/shared";
 import type { Filter } from "./types.js";
 import { makeResult } from "./types.js";
-import { fetchPair } from "../feeds/dexscreener-client.js";
-import {
-  PUMPFUN_VIRTUAL_SOL_RESERVES,
-  PUMPFUN_VIRTUAL_TOKEN_RESERVES,
-} from "../feeds/parsers/pumpfun.js";
+import { fetchPair, invalidate } from "../feeds/dexscreener-client.js";
+import { PUMPFUN_START_PRICE_SOL } from "../feeds/parsers/pumpfun.js";
 
-/** Every pump.fun curve opens at this price in SOL, so any gain over it is net buying. */
-export const PUMPFUN_START_PRICE_SOL = PUMPFUN_VIRTUAL_SOL_RESERVES / PUMPFUN_VIRTUAL_TOKEN_RESERVES;
+export { PUMPFUN_START_PRICE_SOL };
 
 /** How far the curve's price sits above where it started, in percent. */
 export function curveGainPct(priceNative: number, startPriceSol = PUMPFUN_START_PRICE_SOL): number {
@@ -19,6 +15,22 @@ export function curveGainPct(priceNative: number, startPriceSol = PUMPFUN_START_
 function startPriceSol(pool: PoolEvent): number {
   const start = (pool.rawEvent as { curveStartPriceSol?: unknown } | undefined)?.curveStartPriceSol;
   return typeof start === "number" && start > 0 ? start : PUMPFUN_START_PRICE_SOL;
+}
+
+/**
+ * The curve's price on DexScreener and its gain over the curve's start, or
+ * null when DexScreener has no curve price. `fresh` skips the 15s cache.
+ */
+export async function curveGainNow(
+  pool: PoolEvent,
+  fresh = false,
+): Promise<{ priceNative: number; gainPct: number } | null> {
+  if (fresh) invalidate(pool.tokenMint);
+  const pair = await fetchPair(pool.tokenMint);
+  const priceNative = Number(pair?.priceNative);
+  // after migration the best pair is the AMM pool, whose price says nothing about the curve
+  if (!pair || pair.dexId !== "pumpfun" || !Number.isFinite(priceNative) || priceNative <= 0) return null;
+  return { priceNative, gainPct: curveGainPct(priceNative, startPriceSol(pool)) };
 }
 
 /**
@@ -43,16 +55,14 @@ export const curveMomentumFilter: Filter = {
       });
     }
 
-    const pair = await fetchPair(pool.tokenMint);
-    const priceNative = Number(pair?.priceNative);
-    // after migration the best pair is the AMM pool, whose price says nothing about the curve
-    if (!pair || pair.dexId !== "pumpfun" || !Number.isFinite(priceNative) || priceNative <= 0) {
+    const now = await curveGainNow(pool);
+    if (!now) {
       return makeResult("curve-momentum", "skip", "no pump.fun curve price on DexScreener yet", {
         durationMs: Date.now() - start,
       });
     }
 
-    const gainPct = curveGainPct(priceNative, startPriceSol(pool));
+    const { priceNative, gainPct } = now;
     const metadata = { priceNative, gainPct, min };
     if (gainPct < min) {
       return makeResult(

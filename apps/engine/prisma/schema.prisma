@@ -52,6 +52,7 @@ enum ExitReason {
   stop_loss
   trailing_stop
   time_exit
+  dead_coin
   rug_pull
   kill_switch
   manual

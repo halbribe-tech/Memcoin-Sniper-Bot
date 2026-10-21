@@ -4,6 +4,8 @@ import type { Position, Trade } from "@sniperbot/shared";
 import { ExitEngine } from "./exit-engine.js";
 import { PositionStore } from "../state/position-store.js";
 import { MarketFeed, type MarketQuote } from "../execution/market-price.js";
+import { SOL_MINT } from "../feeds/parsers/common.js";
+import { PUMPFUN_START_PRICE_SOL } from "../feeds/parsers/pumpfun.js";
 
 const MIN = 60_000;
 
@@ -54,7 +56,21 @@ function setup(openedAgoMs: number, price: number | null) {
   const tick = () => (engine as unknown as { tick(): void }).tick();
   const setPrice = (priceUsd: number) =>
     prices.set("MINT", { priceUsd, liquidityUsd: 50_000, decimals: 6, at: Date.now() });
-  return { store, feed, tick, setPrice };
+  // a SOL price at which the curve's start is exactly $1
+  const startAt = (usd: number) =>
+    prices.set(SOL_MINT, { priceUsd: usd / PUMPFUN_START_PRICE_SOL, liquidityUsd: null, decimals: 9, at: Date.now() });
+  return { store, feed, tick, setPrice, startAt };
+}
+
+/** Run `fn` with the clock moved forward by `ms`. */
+function later(ms: number, fn: () => void): void {
+  const realNow = Date.now;
+  Date.now = () => realNow() + ms;
+  try {
+    fn();
+  } finally {
+    Date.now = realNow;
+  }
 }
 
 describe("exits on market prices", () => {
@@ -102,6 +118,33 @@ describe("exits on market prices", () => {
     const closed = store.recentlyClosed(1)[0];
     assert.equal(closed?.closeReason, "stop-loss");
     assert.ok((closed?.realizedPnlUsd ?? 0) > 0, "TP1's profit outweighs the break-even exit");
+  });
+
+  test("a pump.fun coin sitting at its curve's start for 3 minutes is sold as dead", async () => {
+    const { store, feed, tick, startAt } = setup(MIN, 0.8);
+    startAt(0.79);
+    await feed.poll();
+    tick();
+    assert.equal(store.count(), 1, "the floor was only just reached");
+    later(2 * MIN, tick);
+    assert.equal(store.count(), 1);
+    later(3 * MIN, tick);
+    assert.equal(store.count(), 0);
+    assert.equal(store.recentlyClosed(1)[0]?.closeReason, "dead-coin");
+  });
+
+  test("a coin that leaves the floor starts its 3 minutes over", async () => {
+    const { store, feed, tick, setPrice, startAt } = setup(MIN, 0.8);
+    startAt(0.79);
+    await feed.poll();
+    tick();
+    setPrice(0.9);
+    await feed.poll();
+    later(2 * MIN, tick);
+    setPrice(0.8);
+    await feed.poll();
+    later(4 * MIN, tick);
+    assert.equal(store.count(), 1, "back at the floor for 2 minutes, not 3");
   });
 
   test("an unpriced position waits inside its window", () => {

@@ -5,6 +5,8 @@ import { paperExecutor, sellResultToTrade } from "../execution/paper-executor.js
 import { liquidityAt, priceAt } from "../execution/price-simulator.js";
 import type { MarketFeed } from "../execution/market-price.js";
 import type { PositionRecord, PositionStore } from "../state/position-store.js";
+import { SOL_MINT } from "../feeds/parsers/common.js";
+import { PUMPFUN_START_PRICE_SOL } from "../feeds/parsers/pumpfun.js";
 
 const log = childLogger("exit-engine");
 
@@ -38,6 +40,8 @@ export class ExitEngine {
   private readonly tickMs = 1000;
   private readonly market: MarketFeed | null;
   private readonly unpricedSince = new Map<string, number>();
+  // position id → when its price came back to the curve's start
+  private readonly atCurveStartSince = new Map<string, number>();
   private rugBroadcasts = 0;
   private partialFills = 0;
   private fullCloses = 0;
@@ -75,6 +79,7 @@ export class ExitEngine {
 
   resetStats(): void {
     this.unpricedSince.clear();
+    this.atCurveStartSince.clear();
     this.rugBroadcasts = 0;
     this.partialFills = 0;
     this.fullCloses = 0;
@@ -105,7 +110,10 @@ export class ExitEngine {
       const updated = this.store.tickPrice(p.id, m.priceUsd);
       if (!updated) continue;
 
-      const decision = this.evaluate(updated, simElapsed, m.rugAt);
+      let decision = this.evaluate(updated, simElapsed, m.rugAt);
+      if (decision.kind === "none" && this.isDeadOnCurve(rec, now)) {
+        decision = { kind: "full-close", reason: "dead-coin" };
+      }
       if (decision.kind === "partial-tp") {
         this.partialFills++;
         const liq = m.liquidityUsd;
@@ -131,10 +139,32 @@ export class ExitEngine {
         );
         const trade = sellResultToTrade(updated.id, sell);
         this.store.closeFully(updated.id, sell.proceedsUsd, trade, decision.reason!);
+        this.atCurveStartSince.delete(updated.id);
         continue;
       }
       this.store.emitUpdate(updated.id);
     }
+  }
+
+  /**
+   * A pump.fun curve cannot fall below its start price, so a coin sitting there
+   * has been sold back by everyone and its loss is already fixed. Waiting for
+   * the time exit only held a slot: 7 of 9 open positions once sat at the
+   * floor, around -25%, while a +750% launch could not be bought.
+   */
+  private isDeadOnCurve(rec: PositionRecord, now: number): boolean {
+    const p = rec.position;
+    if (rec.profile || p.source !== "pumpfun" || env.DEAD_COIN_EXIT_MIN <= 0) return false;
+    const solUsd = this.market?.get(SOL_MINT)?.priceUsd;
+    if (!solUsd) return false;
+    const overStartPct = (p.currentPriceUsd / (solUsd * PUMPFUN_START_PRICE_SOL) - 1) * 100;
+    if (overStartPct > env.DEAD_COIN_MAX_GAIN_PCT) {
+      this.atCurveStartSince.delete(p.id);
+      return false;
+    }
+    const since = this.atCurveStartSince.get(p.id) ?? now;
+    this.atCurveStartSince.set(p.id, since);
+    return now - since >= env.DEAD_COIN_EXIT_MIN * 60_000;
   }
 
   /**

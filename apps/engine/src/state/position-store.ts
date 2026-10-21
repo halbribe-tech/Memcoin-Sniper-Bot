@@ -318,7 +318,7 @@ export class PositionStore extends EventEmitter {
           closedAt: p.closedAt ? new Date(p.closedAt) : new Date(),
           closeReason: (p.closeReason ? exitReasonToPrisma(p.closeReason) : "manual") as
             | "tp1" | "tp2" | "tp3" | "tp4"
-            | "stop_loss" | "trailing_stop" | "time_exit"
+            | "stop_loss" | "trailing_stop" | "time_exit" | "dead_coin"
             | "rug_pull" | "kill_switch" | "manual",
           tpLadder: p.tpLadder as object,
         },
@@ -340,7 +340,7 @@ function tradeToPrisma(t: Trade) {
     mevPenaltyPct: t.mevPenaltyPct,
     exitReason: (t.exitReason ? exitReasonToPrisma(t.exitReason) : null) as
       | "tp1" | "tp2" | "tp3" | "tp4"
-      | "stop_loss" | "trailing_stop" | "time_exit"
+      | "stop_loss" | "trailing_stop" | "time_exit" | "dead_coin"
       | "rug_pull" | "kill_switch" | "manual"
       | null,
     signature: t.signature,

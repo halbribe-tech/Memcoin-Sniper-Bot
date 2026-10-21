@@ -6,6 +6,7 @@ import type { PositionStore } from "../state/position-store.js";
 import type { PnlTracker } from "../analytics/pnl-tracker.js";
 import type { DrawdownCircuit } from "../risk/drawdown-circuit.js";
 import type { EntryQuote, MarketFeed } from "./market-price.js";
+import { PUMPFUN_START_PRICE_SOL } from "../feeds/parsers/pumpfun.js";
 
 const verdict = { decision: "snipe", poolAddress: "P", totalScore: 90 } as OrchestratorVerdict;
 const pool = { poolAddress: "P", tokenMint: "MintMintMint" } as PoolEvent;
@@ -107,5 +108,61 @@ describe("entries", () => {
     assert.equal(quoted(), 0);
     assert.equal(added.length, 1);
     assert.ok(added[0]!.profile, "synthetic positions carry a price profile");
+  });
+});
+
+describe("momentum at the buy", () => {
+  const realFetch = globalThis.fetch;
+  const realRandom = Math.random;
+  beforeEach(() => {
+    Math.random = () => 0.5;
+  });
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+    Math.random = realRandom;
+  });
+
+  /** DexScreener answering with the curve at `overStartPct` above its start. */
+  function curveAt(overStartPct: number) {
+    const priceNative = String(PUMPFUN_START_PRICE_SOL * (1 + overStartPct / 100));
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify([{ dexId: "pumpfun", priceNative, pairAddress: "x" }]))) as typeof fetch;
+  }
+
+  function liveTrader() {
+    const added: Position[] = [];
+    let quoted = 0;
+    const store = { count: () => added.length, add: (p: Position) => added.push(p) } as unknown as PositionStore;
+    const pnl = { buildSnapshot: () => ({ openExposureUsd: 0, balanceUsd: 10_000 }) } as unknown as PnlTracker;
+    const circuit = { canTrade: () => ({ allowed: true }) } as unknown as DrawdownCircuit;
+    const feed = {
+      entryQuote: async () => {
+        quoted++;
+        return { ok: true, priceUsd: 1, liquidityUsd: 100_000, premiumPct: 3 };
+      },
+    } as unknown as MarketFeed;
+    const trader = new Trader(store, pnl, circuit, feed);
+    trader.setEnabled(true);
+    return { trader, added, quoted: () => quoted };
+  }
+
+  const pumpPool = (mint: string) =>
+    ({ poolAddress: mint, tokenMint: mint, source: "pumpfun", initialPriceUsd: 0.000003, initialLiquidityUsd: 5400, detectedAt: 0 }) as PoolEvent;
+
+  test("a curve that slid back under the minimum since its verdict is not bought", async () => {
+    curveAt(5);
+    const { trader, added, quoted } = liveTrader();
+    await trader.handleVerdict({ ...verdict, poolAddress: "Faded1" }, pumpPool("Faded1"));
+    assert.equal(added.length, 0);
+    assert.equal(quoted(), 0, "rejected before the entry quote");
+    assert.equal(trader.getStats().skippedFaded, 1);
+  });
+
+  test("a curve still above the minimum is bought", async () => {
+    curveAt(30);
+    const { trader, added } = liveTrader();
+    await trader.handleVerdict({ ...verdict, poolAddress: "Rising1" }, pumpPool("Rising1"));
+    assert.equal(added.length, 1);
+    assert.equal(trader.getStats().skippedFaded, 0);
   });
 });

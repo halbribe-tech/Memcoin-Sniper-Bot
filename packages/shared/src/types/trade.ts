@@ -8,6 +8,7 @@ export type ExitReason =
   | "stop-loss"
   | "trailing-stop"
   | "time-exit"
+  | "dead-coin"
   | "rug-pull"
   | "kill-switch"
   | "manual";

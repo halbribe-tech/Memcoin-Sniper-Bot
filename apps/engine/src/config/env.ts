@@ -66,6 +66,9 @@ const envSchema = z.object({
   TRAILING_STOP_ACTIVATION_PCT: z.coerce.number().positive(),
   // after TP1 the stop moves to the entry price
   BREAKEVEN_AFTER_TP1: boolFromString.default(true),
+  // a pump.fun position back at its curve's start price this long is sold; 0 = off
+  DEAD_COIN_EXIT_MIN: z.coerce.number().min(0).default(3),
+  DEAD_COIN_MAX_GAIN_PCT: z.coerce.number().min(0).default(2),
   TIME_EXIT_MIN: z.coerce.number().positive(),
   RUG_DETECTION_LP_DROP_PCT: z.coerce.number().positive().max(100),
 

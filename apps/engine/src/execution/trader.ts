@@ -8,6 +8,8 @@ import { buildProfile, isSyntheticPool } from "./price-simulator.js";
 import type { MarketFeed } from "./market-price.js";
 import type { PnlTracker } from "../analytics/pnl-tracker.js";
 import type { DrawdownCircuit } from "../risk/drawdown-circuit.js";
+import { filterConfig } from "../config/filter-config.js";
+import { curveGainNow } from "../filters/curve-momentum.js";
 
 const log = childLogger("trader");
 
@@ -25,6 +27,7 @@ export class Trader {
   private skippedHalted = 0;
   private skippedDisabled = 0;
   private skippedNoPrice = 0;
+  private skippedFaded = 0;
   private failedFills = 0;
   // Off at every start: nothing opens until someone presses Start on the dashboard.
   private enabled = false;
@@ -73,6 +76,7 @@ export class Trader {
     this.skippedHalted = 0;
     this.skippedDisabled = 0;
     this.skippedNoPrice = 0;
+    this.skippedFaded = 0;
     this.failedFills = 0;
   }
 
@@ -84,6 +88,7 @@ export class Trader {
       skippedHalted: this.skippedHalted,
       skippedDisabled: this.skippedDisabled,
       skippedNoPrice: this.skippedNoPrice,
+      skippedFaded: this.skippedFaded,
       failedFills: this.failedFills,
     };
   }
@@ -168,6 +173,7 @@ export class Trader {
 
   private async open(verdict: OrchestratorVerdict, pool: PoolEvent, sizeUsd: number): Promise<boolean> {
     const synthetic = isSyntheticPool(pool);
+    if (!synthetic && (await this.fadedSinceVerdict(pool))) return false;
     let market: EntryMarket | undefined;
     if (!synthetic) {
       // Enter at what a real buy of this size would pay, and only when the
@@ -231,6 +237,25 @@ export class Trader {
     const buyTrade = buyResultToTrade(positionId, result);
 
     this.store.add(position, profile, buyTrade);
+    return true;
+  }
+
+  /**
+   * The filters judged the curve a few seconds ago; by the buy it can have
+   * slid back. Entries at +4% to +8% over the curve's start were bought from
+   * verdicts that saw over +10%, and most of them fell to the floor.
+   */
+  private async fadedSinceVerdict(pool: PoolEvent): Promise<boolean> {
+    const cfg = filterConfig.resolve();
+    if (pool.source !== "pumpfun" || !cfg.enabled("curve-momentum")) return false;
+    const now = await curveGainNow(pool, true);
+    // no fresh price: the verdict's check stands
+    if (!now || now.gainPct >= cfg.curveGainMinPct) return false;
+    this.skippedFaded++;
+    log.info(
+      { mint: pool.tokenMint.slice(0, 8), gainPct: now.gainPct.toFixed(1), min: cfg.curveGainMinPct },
+      "curve fell back below the minimum before the buy — not trading it",
+    );
     return true;
   }
 }

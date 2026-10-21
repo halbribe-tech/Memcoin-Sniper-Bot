@@ -18,6 +18,8 @@ const log = childLogger("parser:pumpfun");
 // initial mcap from the virtual reserves to reflect the price the curve quotes.
 export const PUMPFUN_VIRTUAL_SOL_RESERVES = 30;
 export const PUMPFUN_VIRTUAL_TOKEN_RESERVES = 1_073_000_000;
+/** Every standard pump.fun curve opens at this price in SOL, and cannot fall below it. */
+export const PUMPFUN_START_PRICE_SOL = PUMPFUN_VIRTUAL_SOL_RESERVES / PUMPFUN_VIRTUAL_TOKEN_RESERVES;
 
 /** The curve's opening price in SOL per token, from the reserves it was created with. */
 export function curveStartPriceSol(e: Pick<PumpCreateEvent, "virtualSolReserves" | "virtualTokenReserves">): number {

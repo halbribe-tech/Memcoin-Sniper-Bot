@@ -21,6 +21,7 @@ import { RugWatcher } from "./exits/rug-watcher.js";
 import { DrawdownCircuit } from "./risk/drawdown-circuit.js";
 import { bootstrapPresets } from "./state/filter-presets.js";
 import { wipeStoredStats } from "./state/reset-stats.js";
+import { SOL_MINT } from "./feeds/parsers/common.js";
 import { createAlerter } from "./alerts/index.js";
 
 async function main() {
@@ -88,12 +89,14 @@ async function main() {
   const circuit = new DrawdownCircuit(positionStore, pnl);
   // Market prices (Jupiter, free) for every open position on a real pool.
   // Synthetic positions keep their simulated price and are not polled.
-  const market = new MarketFeed(() =>
-    positionStore
+  const market = new MarketFeed(() => {
+    const mints = positionStore
       .list()
       .filter((p) => !positionStore.get(p.id)?.profile)
-      .map((p) => p.tokenMint),
-  );
+      .map((p) => p.tokenMint);
+    // SOL prices the curve's start, which the dead-coin exit compares against
+    return mints.length > 0 ? [...mints, SOL_MINT] : mints;
+  });
   const trader = new Trader(positionStore, pnl, circuit, market);
   const exitEngine = new ExitEngine(positionStore, env.SYNTHETIC_FEED ? 30 : 1, market);
   const rugWatcher = new RugWatcher(positionStore, exitEngine, market);
@@ -235,6 +238,7 @@ async function main() {
         unrealized: `$${ps.unrealizedPnlUsd.toFixed(2)}`,
         skipped: ts.skippedFull + ts.skippedRate + ts.skippedExposure,
         failedFills: ts.failedFills,
+        skippedFaded: ts.skippedFaded,
         partials: es.partialFills,
         fullCloses: es.fullCloses,
         rugs: es.rugBroadcasts,
