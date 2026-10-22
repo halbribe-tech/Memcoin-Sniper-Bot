@@ -11,10 +11,16 @@ export function curveGainPct(priceNative: number, startPriceSol = PUMPFUN_START_
   return (priceNative / startPriceSol - 1) * 100;
 }
 
-/** The start price read from the launch's CreateEvent; the standard curve's when it was not. */
+/**
+ * The price momentum is measured from: the curve after the dev's own buy in
+ * the create transaction, else the curve's start, else the standard curve's.
+ */
 function startPriceSol(pool: PoolEvent): number {
-  const start = (pool.rawEvent as { curveStartPriceSol?: unknown } | undefined)?.curveStartPriceSol;
-  return typeof start === "number" && start > 0 ? start : PUMPFUN_START_PRICE_SOL;
+  const raw = pool.rawEvent as { launchPriceSol?: unknown; curveStartPriceSol?: unknown } | undefined;
+  for (const v of [raw?.launchPriceSol, raw?.curveStartPriceSol]) {
+    if (typeof v === "number" && v > 0) return v;
+  }
+  return PUMPFUN_START_PRICE_SOL;
 }
 
 /**
@@ -34,7 +40,8 @@ export async function curveGainNow(
 }
 
 /**
- * Rejects a pump.fun launch whose price has not left the curve's start. Buys
+ * Rejects a pump.fun launch whose price has not risen past its launch price,
+ * taken after the dev's own buy in the create transaction. Buys
  * and sells can both be busy while cancelling out: one token showed 34 buys
  * and 21 sells in five minutes and still sat at its launch price, so a $100
  * entry, which pays ~3.6% over the mark, began in a drawdown it never left.
@@ -68,14 +75,14 @@ export const curveMomentumFilter: Filter = {
       return makeResult(
         "curve-momentum",
         "fail",
-        `price ${gainPct >= 0 ? "+" : ""}${gainPct.toFixed(1)}% over curve start < min +${min}% — no net buying since launch`,
+        `price ${gainPct >= 0 ? "+" : ""}${gainPct.toFixed(1)}% over launch (after the dev's buy) < min +${min}% — no net buying since`,
         { metadata, durationMs: Date.now() - start },
       );
     }
     return makeResult(
       "curve-momentum",
       "pass",
-      `price +${gainPct.toFixed(1)}% over curve start ≥ min +${min}%`,
+      `price +${gainPct.toFixed(1)}% over launch (after the dev's buy) ≥ min +${min}%`,
       { metadata, durationMs: Date.now() - start },
     );
   },

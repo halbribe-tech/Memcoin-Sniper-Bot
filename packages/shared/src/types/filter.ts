@@ -45,6 +45,19 @@ export const FILTER_ORDER: FilterId[] = [
   "social-signal",
 ];
 
+/**
+ * Off unless a preset or the Filters page turns them on. anti-sniper-war
+ * counts transactions among a coin's newest signatures, not its first block,
+ * so it measures how busy a coin is right now and rejected the busiest: in
+ * one hour of verdicts all four that rose 500%+ after being judged, and 8 of
+ * the 9 that reached TP1.
+ */
+export const FILTERS_OFF_BY_DEFAULT: readonly FilterId[] = ["anti-sniper-war"];
+
+export function filterOnByDefault(id: FilterId): boolean {
+  return !FILTERS_OFF_BY_DEFAULT.includes(id);
+}
+
 export type FilterStatus = "pass" | "fail" | "skip" | "error";
 
 export interface FilterResult {

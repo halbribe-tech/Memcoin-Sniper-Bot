@@ -22,6 +22,7 @@ import { DrawdownCircuit } from "./risk/drawdown-circuit.js";
 import { bootstrapPresets } from "./state/filter-presets.js";
 import { wipeStoredStats } from "./state/reset-stats.js";
 import { SOL_MINT } from "./feeds/parsers/common.js";
+import { launchTracker } from "./feeds/launch-tracker.js";
 import { createAlerter } from "./alerts/index.js";
 
 async function main() {
@@ -81,6 +82,8 @@ async function main() {
   // === Pool detection pipeline ===
   const stream = new HeliusLogStream();
   const detector = new PoolDetector(stream);
+  // who bought each launch's first slot, and what they still hold: free, from the same stream
+  stream.on("pump-logs", (logs, slot) => launchTracker.ingest(logs, slot));
   const orchestrator = new FilterOrchestrator();
 
   // === Phase 3: paper trading ===

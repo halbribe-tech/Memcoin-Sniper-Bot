@@ -27,7 +27,12 @@ export function curveStartPriceSol(e: Pick<PumpCreateEvent, "virtualSolReserves"
 }
 
 /** A launch built from its CreateEvent alone: no transaction fetch, no RPC credit. */
-export function poolEventFromCreate(e: PumpCreateEvent, signature: string, detectedAt: number): PoolEvent {
+export function poolEventFromCreate(
+  e: PumpCreateEvent,
+  signature: string,
+  detectedAt: number,
+  creationBuyPriceSol: number | null = null,
+): PoolEvent {
   const startPriceSol = curveStartPriceSol(e);
   return {
     poolAddress: e.mint,
@@ -40,7 +45,11 @@ export function poolEventFromCreate(e: PumpCreateEvent, signature: string, detec
     creatorWallet: e.user,
     detectedAt,
     signature,
-    rawEvent: { curveStartPriceSol: startPriceSol },
+    rawEvent: {
+      curveStartPriceSol: startPriceSol,
+      // what momentum is measured from: the price once the dev's own buy is in
+      launchPriceSol: Math.max(startPriceSol, creationBuyPriceSol ?? 0),
+    },
   };
 }
 

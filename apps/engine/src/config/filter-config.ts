@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import type { FilterConfigDelta, FilterId } from "@sniperbot/shared";
+import { filterOnByDefault, type FilterConfigDelta, type FilterId } from "@sniperbot/shared";
 import { env } from "./env.js";
 import { childLogger } from "../utils/logger.js";
 
@@ -54,7 +54,7 @@ class FilterConfigStore extends EventEmitter {
     const t = d?.thresholds ?? {};
     const enabledMap = d?.enabled ?? {};
     return {
-      enabled: (id) => enabledMap[id] ?? true,
+      enabled: (id) => enabledMap[id] ?? filterOnByDefault(id),
       liquidityMinUsd: t.liquidityMinUsd ?? env.FILTER_LIQUIDITY_MIN_USD,
       liquidityMaxUsd: t.liquidityMaxUsd ?? env.FILTER_LIQUIDITY_MAX_USD,
       lpLockedRequired: t.lpLockedRequired ?? env.FILTER_LP_LOCKED_REQUIRED,

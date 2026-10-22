@@ -5,6 +5,7 @@ import { getSocket } from "@/lib/socket";
 import {
   FILTER_LABELS,
   FILTER_ORDER,
+  filterOnByDefault,
   type FilterConfigDelta,
   type FilterId,
   type FilterPreset,
@@ -27,7 +28,7 @@ const THRESHOLD_FIELDS: Array<{
   { key: "top10HoldersMaxPct", label: "Max top-10 holders", min: 10, max: 100, step: 1, suffix: "%" },
   { key: "devRugRateMax", label: "Dev rug rate max", min: 0, max: 1, step: 0.05, isPct: true },
   { key: "maxSellTaxPct", label: "Max sell tax", min: 0, max: 100, step: 1, suffix: "%" },
-  { key: "curveGainMinPct", label: "Min gain over curve start", min: 0, max: 200, step: 5, suffix: "%" },
+  { key: "curveGainMinPct", label: "Min gain over launch price", min: 0, max: 200, step: 5, suffix: "%" },
 ];
 
 const TOGGLE_FIELDS: Array<{
@@ -124,7 +125,7 @@ export function FilterConfigView() {
   const toggleFilter = (id: FilterId) => {
     setDraft((d) => ({
       ...d,
-      enabled: { ...(d.enabled ?? {}), [id]: !(d.enabled?.[id] ?? true) },
+      enabled: { ...(d.enabled ?? {}), [id]: !(d.enabled?.[id] ?? filterOnByDefault(id)) },
     }));
   };
 
@@ -240,7 +241,7 @@ export function FilterConfigView() {
           </p>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
             {FILTER_ORDER.map((id) => {
-              const enabled = draft.enabled?.[id] ?? true;
+              const enabled = draft.enabled?.[id] ?? filterOnByDefault(id);
               return (
                 <button
                   key={id}

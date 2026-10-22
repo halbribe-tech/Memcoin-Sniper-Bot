@@ -6,7 +6,7 @@ import { childLogger } from "../utils/logger.js";
 import { HeliusLogStream, type RawLogEvent } from "./helius-ws.js";
 import { getParser } from "./parsers/index.js";
 import { poolEventFromCreate } from "./parsers/pumpfun.js";
-import { decodePumpCreateEvent, launchSkipReason } from "./parsers/pumpfun-event.js";
+import { creationBuyPriceSol, decodePumpCreateEvent, launchSkipReason } from "./parsers/pumpfun-event.js";
 import { env } from "../config/env.js";
 import { publishPoolEvent } from "../state/pool-stream.js";
 import { getPrisma } from "../state/db.js";
@@ -110,7 +110,8 @@ export class PoolDetector extends EventEmitter {
       log.debug({ mint: created.mint, reason }, "launch dropped");
       return;
     }
-    void this.persistAndPublish(poolEventFromCreate(created, raw.signature, raw.receivedAt));
+    const launchBuy = creationBuyPriceSol(raw.logs, created.mint);
+    void this.persistAndPublish(poolEventFromCreate(created, raw.signature, raw.receivedAt, launchBuy));
   }
 
   private async processLog(raw: RawLogEvent, conn: Connection): Promise<void> {

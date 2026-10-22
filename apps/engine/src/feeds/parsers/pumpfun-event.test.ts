@@ -1,6 +1,6 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { decodePumpCreateEvent, isSolPaired, launchSkipReason } from "./pumpfun-event.js";
+import { creationBuyPriceSol, decodePumpCreateEvent, isSolPaired, launchSkipReason } from "./pumpfun-event.js";
 import { curveStartPriceSol, poolEventFromCreate } from "./pumpfun.js";
 
 // CreateEvent log lines from real mainnet create_v2 transactions
@@ -10,6 +10,12 @@ const PUMP_PAIRED =
   "Program data: G3KpTd7rY3YHAAAATm93aGVyZQcAAABOT1dIRVJFWAAAAGh0dHBzOi8vc3Vtby1pcGZzLnF1aWNrbm9kZS1pcGZzLmNvbS9pcGZzL1FtUmVQZlYzTnI2OUZHa0ZqeWViQjNMUEsyRnJtVzNrem1mQ3Z5bVhjb3h4R0FE8fgg6GzJlXQjdsQA3aW/givcsk8gm0oVP5WCFOMt0qe2ccXaojGIyHrNOCFfd8y8yUUWTk7ArOE/whoPk/rg/uIu4ErmJ+99KJUXhqfOsTN8TkrAFIIwEQTTUzB0Apj+4i7gSuYn730olReGp86xM3xOSsAUgjARBNNTMHQCmDQB2WoAAAAAABDYR+PPAwD193jVmQAAAAB4xftR0QIAAIDGpH6NAwAG3fbh7nWP3hhCXbzkbM3athr8TYO5DSf+vfko2KGL/AAADEX3342ecpVihJM/bZi3VwMug9+EYE+14Rf/9h1bEvn193jVmQAAACwBAAAAAAAAAAA=";
 const MAYHEM =
   "Program data: G3KpTd7rY3YGAAAAQ0hVTktZBQAAAENIVU5LQwAAAGh0dHBzOi8vaXBmcy5pby9pcGZzL1FtU3lNZVZmNEo2Y3czR3JUV1RqVUFUUU5mem5QUVNzM3ltemk0aDc4SkpBanoJSci8n3Ucju7aaeAU/eOKTCcLBd5Y+A+jWvgWMCCnDyDQ4RnuxhuumuAsZZ+D3VTgKVMmPKSWU9TgWudGZ1A0psx8ShhkP5PIqFm4DbwP53Km+GmSzKpM4JE4wFHJLT2mzHxKGGQ/k8ioWbgNvA/ncqb4aZLMqkzgkTjAUcktPUAB2WoAAAAAABDYR+PPAwAArCP8BgAAAAB4xftR0QIAAIDGpH6NAwAG3fbh7nWP3hhCXbzkbM3athr8TYO5DSf+vfko2KGL/AEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAArCP8BgAAAAAAAAAAAAAAAAA=";
+
+// create_v2 plus the dev's 0.99 SOL buy in the same transaction
+const WITH_DEV_BUY = [
+  "Program data: G3KpTd7rY3YLAAAARUNIT1RSSUJCTEULAAAARUNIT1RSSUJCTEVAAAAAaHR0cHM6Ly9tZXRhLnV4ZW50by5pby9kYXRhLzk5ZDBkYzJlLTMzYWMtNDA3My04ZGI4LTliMmZhMTZhZDZjMKtnqF1nIHlDjzegmY8vSWYOkqXJTddaALUfCEQInnjvaFAdXaHjeLFx7iTOO/TekZgPQCuiJuwHGd6kJ9xschxfiKikr+BY96Qd2AgcDtGMnwLyvebsPRf3Az/1lpHqzl+IqKSv4Fj3pB3YCBwO0YyfAvK95uw9F/cDP/WWkerOLwLZagAAAAAAENhH488DAACsI/wGAAAAAHjF+1HRAgAAgMakfo0DAAbd9uHudY/eGEJdvORszdq2GvxNg7kNJ/69+SjYoYv8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACsI/wGAAAAAAAAAAAAAAAAAA==",
+  "Program data: vdt/007mYe6rZ6hdZyB5Q483oJmPL0lmDpKlyU3XWgC1HwhECJ5477Bo3joAAAAA6oVanxofAAABX4iopK/gWPekHdgIHA7RjJ8C8r3m7D0X9wM/9ZaR6s4vAtlqAAAAALAUAjcHAAAAFop9qMiwAwCwaN46AAAAABbyalw3sgIASsL40N1cvJfjKJwZfLUGKlTz2Va5zm5RFfllZ6pcs+ZfAAAAAAAAAD0rjwAAAAAAX4iopK/gWPekHdgIHA7RjJ8C8r3m7D0X9wM/9ZaR6s4eAAAAAAAAABM2LQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEAAAAGJ1eV9leGFjdF9zb2xfaW4AAAAAAAAAAAAAAAAAAAAAAIgTAAAAAAAAnpVHAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACwaN46AAAAALAUAjcHAAAAsGjeOgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+];
 
 const logs = (data: string) => [
   "Program 6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P invoke [1]",
@@ -57,6 +63,23 @@ describe("pump.fun CreateEvent", () => {
     assert.equal(pool.source, "pumpfun");
     assert.equal(pool.tokenMint, e.mint);
     assert.equal(pool.creatorWallet, e.user);
-    assert.deepEqual(pool.rawEvent, { curveStartPriceSol: curveStartPriceSol(e) });
+    assert.deepEqual(pool.rawEvent, { curveStartPriceSol: curveStartPriceSol(e), launchPriceSol: curveStartPriceSol(e) });
+  });
+
+  test("the dev's buy in the create transaction sets the launch price momentum is measured from", () => {
+    const e = decodePumpCreateEvent(WITH_DEV_BUY);
+    assert.ok(e);
+    const start = curveStartPriceSol(e);
+    const afterDevBuy = creationBuyPriceSol(WITH_DEV_BUY, e.mint);
+    assert.ok(afterDevBuy);
+    // 0.99 SOL into 30 virtual SOL: (30.99 / 30)^2 ≈ +6.7%
+    assert.ok(Math.abs((afterDevBuy / start - 1) * 100 - 6.7) < 0.1);
+    const pool = poolEventFromCreate(e, "sig", 1, afterDevBuy);
+    assert.equal((pool.rawEvent as { launchPriceSol: number }).launchPriceSol, afterDevBuy);
+  });
+
+  test("a create without a buy has no launch buy, and another mint's trade is ignored", () => {
+    assert.equal(creationBuyPriceSol(logs(SOL_PAIRED), "CfQF6gavwY9x2LurUkT6STmXog8DGdomRQN8ysFGZnGG"), null);
+    assert.equal(creationBuyPriceSol(WITH_DEV_BUY, "CfQF6gavwY9x2LurUkT6STmXog8DGdomRQN8ysFGZnGG"), null);
   });
 });

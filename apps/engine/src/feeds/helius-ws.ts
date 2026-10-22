@@ -20,6 +20,8 @@ export interface RawLogEvent {
 
 interface HeliusLogStreamEvents {
   log: (event: RawLogEvent) => void;
+  // every pump.fun transaction, creates and trades alike
+  "pump-logs": (logs: string[], slot: number) => void;
   ready: () => void;
   error: (err: Error) => void;
 }
@@ -130,6 +132,7 @@ export class HeliusLogStream extends EventEmitter {
   private handleLog(target: ProgramTarget, logs: Logs, ctx: Context): void {
     countLogNotification();
     if (logs.err) return;
+    if (target.source === "pumpfun") this.emit("pump-logs", logs.logs, ctx.slot);
     if (this.dedupeWindow.has(logs.signature)) return;
 
     const matches = target.creationMarkers.some((marker) =>

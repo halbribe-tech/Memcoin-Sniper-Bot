@@ -89,8 +89,12 @@ const envSchema = z.object({
   FILTER_HONEYPOT_SIM_REQUIRED: boolFromString,
   FILTER_MAX_SELL_TAX_PCT: z.coerce.number().min(0).max(100),
   FILTER_BUNDLED_LAUNCH_REJECT: boolFromString,
-  // % a pump.fun price must sit over the curve start; 10% ≈ 1.5 SOL net bought
-  FILTER_CURVE_GAIN_MIN_PCT: z.coerce.number().min(0).default(10),
+  // % of supply the launch-slot buyers (dev excluded) may still hold
+  FILTER_BUNDLE_MAX_SUPPLY_PCT: z.coerce.number().min(0).max(100).default(15),
+  // % of their own buy the dev may already have sold
+  FILTER_DEV_MAX_SOLD_PCT: z.coerce.number().min(0).max(100).default(50),
+  // % a pump.fun price must sit over its launch price (after the dev's buy)
+  FILTER_CURVE_GAIN_MIN_PCT: z.coerce.number().min(0).default(20),
   FILTER_MIN_FILTER_SCORE: z.coerce.number().min(0).max(100),
 
   // Execution

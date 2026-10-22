@@ -4,6 +4,7 @@ import type {
   FilterId,
   PoolEvent,
 } from "@sniperbot/shared";
+import { filterOnByDefault } from "@sniperbot/shared";
 import { childLogger } from "../utils/logger.js";
 import { getPrisma } from "../state/db.js";
 import { env } from "../config/env.js";
@@ -87,7 +88,7 @@ function buildResolvedConfig(d: FilterConfigDelta): ResolvedFilterConfig {
   const t = d.thresholds ?? {};
   const enabledMap = d.enabled ?? {};
   return {
-    enabled: (id: FilterId) => enabledMap[id] ?? true,
+    enabled: (id: FilterId) => enabledMap[id] ?? filterOnByDefault(id),
     liquidityMinUsd: t.liquidityMinUsd ?? env.FILTER_LIQUIDITY_MIN_USD,
     liquidityMaxUsd: t.liquidityMaxUsd ?? env.FILTER_LIQUIDITY_MAX_USD,
     lpLockedRequired: t.lpLockedRequired ?? env.FILTER_LP_LOCKED_REQUIRED,

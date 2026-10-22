@@ -1,21 +1,17 @@
-import { PublicKey } from "@solana/web3.js";
 import type { Filter } from "./types.js";
 import { makeResult } from "./types.js";
-import { fetchParsedTx, getFeePayer } from "../feeds/parsers/common.js";
-import { childLogger } from "../utils/logger.js";
+import { env } from "../config/env.js";
+import { launchTracker } from "../feeds/launch-tracker.js";
 
-const log = childLogger("filter:bundled-launch");
-
-const SIG_FETCH_LIMIT = 20;
-const EARLY_WINDOW_SEC = 4;
-const SAMPLE_TX_LIMIT = 8; // cap parsed-tx fetches per evaluation (RPC cost)
-const SINGLE_PAYER_DOMINANCE = 0.5; // fail if one non-creator wallet > 50% of early sample
-const cache = new Map<string, { bundled: boolean; reason: string; cachedAt: number }>();
-const CACHE_TTL_MS = 5 * 60 * 1000;
-
+/**
+ * Rejects a launch whose first buyers are still sitting on enough supply to
+ * dump it, or whose dev has already sold. Coins bought at +100-350% over
+ * launch fell to the curve's start within 9-30s, sold in one move: the
+ * supply was in a few hands from the first slot. Read from the trades the
+ * log stream already delivers, so it costs no RPC credits.
+ */
 export const bundledLaunchFilter: Filter = {
   id: "bundled-launch",
-  usesRpc: true,
   weight: 8,
   enabled: true,
   async evaluate(pool, ctx) {
@@ -36,92 +32,35 @@ export const bundledLaunchFilter: Filter = {
       );
     }
 
-    const cached = cache.get(pool.poolAddress);
-    if (cached && Date.now() - cached.cachedAt < CACHE_TTL_MS) {
-      return makeResult(
-        "bundled-launch",
-        cached.bundled ? "fail" : "pass",
-        `${cached.reason} (cached)`,
-        { durationMs: Date.now() - start },
-      );
-    }
-
-    try {
-      const sigs = await ctx.conn.getSignaturesForAddress(new PublicKey(pool.poolAddress), {
-        limit: SIG_FETCH_LIMIT,
+    const s = pool.source === "pumpfun" ? launchTracker.stats(pool.tokenMint) : null;
+    if (!s) {
+      return makeResult("bundled-launch", "skip", "launch not seen by this engine run", {
+        durationMs: Date.now() - start,
       });
-      if (sigs.length === 0) {
-        return makeResult("bundled-launch", "skip", "no signatures yet for pool", {
-          durationMs: Date.now() - start,
-        });
-      }
+    }
 
-      const ordered = [...sigs].sort((a, b) => (a.blockTime ?? 0) - (b.blockTime ?? 0));
-      const oldestTime = ordered[0]?.blockTime ?? Math.floor(pool.detectedAt / 1000);
-      const cutoff = oldestTime + EARLY_WINDOW_SEC;
-      const earlySigs = ordered.filter(
-        (s) => s.blockTime !== null && s.blockTime !== undefined && s.blockTime <= cutoff,
-      );
+    const maxHeld = env.FILTER_BUNDLE_MAX_SUPPLY_PCT;
+    const maxDevSold = env.FILTER_DEV_MAX_SOLD_PCT;
+    const metadata = { ...s, maxHeldPct: maxHeld, maxDevSoldPct: maxDevSold };
+    const held = `${s.launchBuyers} launch-slot buyer(s) hold ${s.launchBuyersHeldPct.toFixed(1)}%`;
 
-      const sample = earlySigs.slice(0, SAMPLE_TX_LIMIT);
-      const payers: string[] = [];
-      for (const s of sample) {
-        const tx = await fetchParsedTx(ctx.conn, s.signature, 1);
-        if (!tx) continue;
-        const fp = getFeePayer(tx);
-        if (fp) payers.push(fp);
-      }
-
-      if (payers.length < 3) {
-        const reason = `only ${payers.length} early payer(s) — insufficient sample`;
-        cache.set(pool.poolAddress, { bundled: false, reason, cachedAt: Date.now() });
-        return makeResult("bundled-launch", "skip", reason, {
-          metadata: { payersSampled: payers.length },
-          durationMs: Date.now() - start,
-        });
-      }
-
-      const nonCreator = payers.filter((p) => p !== pool.creatorWallet);
-      const counts = new Map<string, number>();
-      for (const p of nonCreator) counts.set(p, (counts.get(p) ?? 0) + 1);
-      let topPayer = "";
-      let topCount = 0;
-      for (const [p, c] of counts) {
-        if (c > topCount) {
-          topPayer = p;
-          topCount = c;
-        }
-      }
-      const dominance = nonCreator.length > 0 ? topCount / nonCreator.length : 0;
-      const bundled = dominance >= SINGLE_PAYER_DOMINANCE;
-      const reason = bundled
-        ? `${topPayer.slice(0, 8)}… controls ${(dominance * 100).toFixed(0)}% of early non-creator txs`
-        : `${counts.size} unique early buyers — distributed`;
-
-      cache.set(pool.poolAddress, { bundled, reason, cachedAt: Date.now() });
-
+    if (s.devBoughtPct > 0 && s.devSoldPct >= maxDevSold) {
       return makeResult(
         "bundled-launch",
-        bundled ? "fail" : "pass",
-        reason,
-        {
-          metadata: {
-            payersSampled: payers.length,
-            uniqueNonCreatorPayers: counts.size,
-            topPayerSharePct: Math.round(dominance * 100),
-            windowSec: EARLY_WINDOW_SEC,
-          },
-          durationMs: Date.now() - start,
-        },
-      );
-    } catch (err) {
-      log.warn({ err: (err as Error).message, pool: pool.poolAddress }, "bundled check failed");
-      return makeResult(
-        "bundled-launch",
-        "error",
-        `RPC error: ${(err as Error).message}`,
-        { durationMs: Date.now() - start },
+        "fail",
+        `dev already sold ${s.devSoldPct.toFixed(0)}% of their ${s.devBoughtPct.toFixed(1)}% buy`,
+        { metadata, durationMs: Date.now() - start },
       );
     }
+    if (s.launchBuyersHeldPct >= maxHeld) {
+      return makeResult("bundled-launch", "fail", `${held} of supply ≥ ${maxHeld}% — ready to dump`, {
+        metadata,
+        durationMs: Date.now() - start,
+      });
+    }
+    return makeResult("bundled-launch", "pass", `${held} of supply < ${maxHeld}%`, {
+      metadata,
+      durationMs: Date.now() - start,
+    });
   },
 };

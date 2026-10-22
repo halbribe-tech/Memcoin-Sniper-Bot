@@ -133,12 +133,12 @@ buy** and **when you sell**:
 | `freeze-authority` | the dev can still freeze holders' tokens | 10 |
 | `lp-locked` | liquidity is neither burned nor locked | 10 |
 | `top-holders` | the largest holder, or the top ten together, hold too much | 8 |
-| `bundled-launch` | the first block was bought by wallets funded from one source | 8 |
-| `curve-momentum` | a pump.fun price still sits within 10% of the curve's start price when the filters run, so nobody has net-bought it (`FILTER_CURVE_GAIN_MIN_PCT`) | 6 |
+| `bundled-launch` | the wallets that bought in the launch slot still hold 15%+ of supply, or the dev has sold half their buy (read from the log stream, no RPC) | 8 |
+| `curve-momentum` | a pump.fun price sits less than 20% above its launch price when the filters run, the launch price being the curve after the dev's own buy (`FILTER_CURVE_GAIN_MIN_PCT`) | 6 |
 | `insider-detection` | the creator was funded by a flagged wallet | 6 |
 | `liquidity-min` | liquidity is too thin to exit, or too deep to still be early | 5 |
 | `volume-velocity` | buy/sell flow and unique buyers look inorganic | 4 |
-| `anti-sniper-war` | the first block was already crowded with snipers | 4 |
+| `anti-sniper-war` | the first block was already crowded with snipers (off by default: it counted the newest transactions, not the first block, so it rejected the coins trading most) | 4 |
 | `social-signal` | its DexScreener profile shows too little social presence (no profile at all is unknown: profiles are paid) | 3 |
 
 Every filter can be toggled and tuned from the dashboard, and settings can be saved as presets
