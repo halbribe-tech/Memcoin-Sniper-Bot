@@ -26,6 +26,21 @@ interface HeliusLogStreamEvents {
   error: (err: Error) => void;
 }
 
+// pump.fun alone sends ~200 logs a second: a minute without one is a dead socket
+const SILENCE_MS = 60_000;
+const RECONNECT_INTERVAL_MS = 10_000;
+
+interface ReconnectingSocket {
+  setAutoReconnect(on: boolean): void;
+  setReconnectInterval(ms: number): void;
+  close(): void;
+}
+
+/** web3.js keeps its rpc-websockets client private; this is the only handle on reconnects. */
+function socketOf(conn: Connection | null): ReconnectingSocket | undefined {
+  return (conn as unknown as { _rpcWebSocket?: ReconnectingSocket } | null)?._rpcWebSocket;
+}
+
 export declare interface HeliusLogStream {
   on<E extends keyof HeliusLogStreamEvents>(event: E, listener: HeliusLogStreamEvents[E]): this;
   emit<E extends keyof HeliusLogStreamEvents>(
@@ -42,6 +57,9 @@ export class HeliusLogStream extends EventEmitter {
   private dedupeWindow = new Map<string, number>();
   private dedupeTimer: NodeJS.Timeout | null = null;
   private readonly DEDUPE_TTL_MS = 60_000;
+  private startedAt = 0;
+  private lastLogAt = 0;
+  private silenceTimer: NodeJS.Timeout | null = null;
 
   constructor() {
     super();
@@ -54,8 +72,17 @@ export class HeliusLogStream extends EventEmitter {
     }
   }
 
+  /**
+   * Live only while logs actually arrive. Subscribing succeeds locally even
+   * when every WebSocket handshake is refused, so this used to say "live"
+   * through 40 minutes of HTTP 429 and not a single log.
+   */
   isReady(): boolean {
-    return this.started && this.subscriptionIds.length > 0;
+    return (
+      this.started &&
+      this.subscriptionIds.length > 0 &&
+      Date.now() - Math.max(this.lastLogAt, this.startedAt) < SILENCE_MS
+    );
   }
 
   getConnection(): Connection | null {
@@ -94,6 +121,9 @@ export class HeliusLogStream extends EventEmitter {
       commitment: "processed",
       fetch: meteredFetch,
     });
+    // web3.js retries a refused socket every second, forever: against a 429
+    // that hammering keeps the rate limit in force. Every 10s gives it room.
+    socketOf(this.connection)?.setReconnectInterval(RECONNECT_INTERVAL_MS);
 
     log.info(
       { sources: this.targets.map((t) => t.source) },
@@ -124,13 +154,16 @@ export class HeliusLogStream extends EventEmitter {
     }
 
     this.started = true;
+    this.startedAt = Date.now();
     this.dedupeTimer = setInterval(() => this.cleanupDedupe(), this.DEDUPE_TTL_MS);
+    this.silenceTimer = setInterval(() => void this.reconnectIfSilent(), SILENCE_MS / 2);
     this.emit("ready");
     log.info({ subscriptions: this.subscriptionIds.length }, "Helius log stream live");
   }
 
   private handleLog(target: ProgramTarget, logs: Logs, ctx: Context): void {
     countLogNotification();
+    this.lastLogAt = Date.now();
     if (logs.err) return;
     if (target.source === "pumpfun") this.emit("pump-logs", logs.logs, ctx.slot);
     if (this.dedupeWindow.has(logs.signature)) return;
@@ -154,6 +187,13 @@ export class HeliusLogStream extends EventEmitter {
     this.emit("log", event);
   }
 
+  private async reconnectIfSilent(): Promise<void> {
+    if (!this.started || this.isReady()) return;
+    log.warn({ silentSec: Math.round((Date.now() - Math.max(this.lastLogAt, this.startedAt)) / 1000) }, "no logs — reconnecting");
+    await this.stop();
+    await this.start();
+  }
+
   private cleanupDedupe(): void {
     const cutoff = Date.now() - this.DEDUPE_TTL_MS;
     for (const [sig, t] of this.dedupeWindow) {
@@ -171,9 +211,17 @@ export class HeliusLogStream extends EventEmitter {
       }
     }
     this.subscriptionIds = [];
+    // Removing the subscriptions leaves the socket reconnecting on its own;
+    // each start used to add one more, against a limit of 5 on the free plan.
+    const socket = socketOf(this.connection);
+    socket?.setAutoReconnect(false);
+    socket?.close();
+    this.connection = null;
     // An interval left running keeps the process alive after "Goodbye.".
     if (this.dedupeTimer) clearInterval(this.dedupeTimer);
     this.dedupeTimer = null;
+    if (this.silenceTimer) clearInterval(this.silenceTimer);
+    this.silenceTimer = null;
     this.started = false;
     log.info("Stopped");
   }
