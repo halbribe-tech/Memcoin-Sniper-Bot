@@ -104,6 +104,13 @@ async function main() {
   const trader = new Trader(positionStore, pnl, circuit, market);
   const exitEngine = new ExitEngine(positionStore, env.SYNTHETIC_FEED ? 30 : 1, market);
   const rugWatcher = new RugWatcher(positionStore, exitEngine, market);
+  // pump.fun positions exit on the curve's own trades, not on 3s price polls
+  launchTracker.on("price", (mint, priceSol, virtualSol) => {
+    if (!positionStore.list().some((p) => p.tokenMint === mint)) return;
+    const solUsd = market.get(SOL_MINT)?.priceUsd;
+    if (!solUsd) return;
+    exitEngine.onCurveTrade(mint, priceSol * solUsd, virtualSol * solUsd);
+  });
   const alerter = createAlerter({ store: positionStore, circuit, pnl });
 
   // What the last run left open carries on; what it closed stays in the totals.

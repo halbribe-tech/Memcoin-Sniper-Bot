@@ -60,7 +60,7 @@ function setup(openedAgoMs: number, price: number | null) {
   // a SOL price at which the curve's start is exactly $1
   const startAt = (usd: number) =>
     prices.set(SOL_MINT, { priceUsd: usd / PUMPFUN_START_PRICE_SOL, liquidityUsd: null, decimals: 9, at: Date.now() });
-  return { store, feed, tick, setPrice, startAt };
+  return { store, feed, tick, setPrice, startAt, engine };
 }
 
 /** Run `fn` with the clock moved forward by `ms`. */
@@ -163,6 +163,27 @@ describe("exits on market prices", () => {
     } finally {
       mutable.HARD_EXIT_MIN = before;
     }
+  });
+
+  test("a trade on the curve below the stop closes the position at once, with no tick", () => {
+    const { store, engine } = setup(MIN, null);
+    engine.onCurveTrade("MINT", 0.5, 50_000);
+    assert.equal(store.count(), 0);
+    assert.equal(store.recentlyClosed(1)[0]?.closeReason, "stop-loss");
+  });
+
+  test("a fresh curve price outranks the polled market price", async () => {
+    const { store, feed, tick, engine } = setup(MIN, 1.0);
+    await feed.poll();
+    engine.onCurveTrade("MINT", 1.6, 50_000);
+    tick();
+    assert.equal(store.list()[0]?.status, "partial", "+60% on the curve took TP1, though the poll said +0%");
+  });
+
+  test("trades on other coins leave a position alone", () => {
+    const { store, engine } = setup(MIN, null);
+    engine.onCurveTrade("OTHER", 0.1, 50_000);
+    assert.equal(store.count(), 1);
   });
 
   test("an unpriced position waits inside its window", () => {

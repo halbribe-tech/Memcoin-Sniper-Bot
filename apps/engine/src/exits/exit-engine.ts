@@ -8,6 +8,8 @@ import type { PositionRecord, PositionStore } from "../state/position-store.js";
 import { SOL_MINT } from "../feeds/parsers/common.js";
 import { PUMPFUN_START_PRICE_SOL } from "../feeds/parsers/pumpfun.js";
 
+// a curve price older than this falls back to the polled market price
+const CURVE_FRESH_MS = 15_000;
 const log = childLogger("exit-engine");
 
 const TP_REASONS: ExitReason[] = ["tp1", "tp2", "tp3", "tp4"];
@@ -42,6 +44,8 @@ export class ExitEngine {
   private readonly unpricedSince = new Map<string, number>();
   // position id → when its price came back to the curve's start
   private readonly atCurveStartSince = new Map<string, number>();
+  // mint → the curve's price from the last trade the log stream delivered
+  private readonly curve = new Map<string, { priceUsd: number; liquidityUsd: number; at: number }>();
   private rugBroadcasts = 0;
   private partialFills = 0;
   private fullCloses = 0;
@@ -61,9 +65,28 @@ export class ExitEngine {
         rugAt: rec.profile.rugAt,
       };
     }
+    const c = this.curve.get(rec.position.tokenMint);
+    if (c && Date.now() - c.at < CURVE_FRESH_MS) return { priceUsd: c.priceUsd, liquidityUsd: c.liquidityUsd, rugAt: null };
     const q = this.market?.get(rec.position.tokenMint);
     // a real pool's rugs are caught by the rug watcher, not simulated
     return q ? { priceUsd: q.priceUsd, liquidityUsd: q.liquidityUsd ?? 0, rugAt: null } : null;
+  }
+
+  /**
+   * A trade on a pump.fun curve, from the log stream: the exits run on it at
+   * once. Polling prices every 3s let a dump fall through the stop between
+   * polls; replayed over 357 breakout entries, acting on every trade cut the
+   * average loss from -36% to -30% at the same settings.
+   */
+  onCurveTrade(mint: string, priceUsd: number, liquidityUsd: number): void {
+    const now = Date.now();
+    this.curve.set(mint, { priceUsd, liquidityUsd, at: now });
+    for (const p of this.store.list()) {
+      if (p.tokenMint !== mint) continue;
+      const rec = this.store.get(p.id);
+      // the 1s tick tells the dashboard; a busy curve trades many times a second
+      if (rec && !rec.profile) this.step(rec, now, false);
+    }
   }
 
   start(): void {
@@ -98,52 +121,59 @@ export class ExitEngine {
     const now = Date.now();
     for (const p of this.store.list()) {
       const rec = this.store.get(p.id);
-      if (!rec) continue;
-      const wallElapsed = now - p.openedAt;
-      const simElapsed = wallElapsed * this.timeScale;
-      const m = this.marketFor(rec, simElapsed);
-      if (!m) {
-        this.handleUnpriced(rec, now, simElapsed);
-        continue;
-      }
-      this.unpricedSince.delete(p.id);
-      const updated = this.store.tickPrice(p.id, m.priceUsd);
-      if (!updated) continue;
-
-      let decision = this.evaluate(updated, simElapsed, m.rugAt);
-      if (decision.kind === "none" && this.isDeadOnCurve(rec, now)) {
-        decision = { kind: "full-close", reason: "dead-coin" };
-      }
-      if (decision.kind === "partial-tp") {
-        this.partialFills++;
-        const liq = m.liquidityUsd;
-        const sell = paperExecutor.sell(
-          updated.entryPriceUsd,
-          updated.currentPriceUsd,
-          decision.tokensToSell!,
-          liq,
-          decision.reason!,
-        );
-        const trade = sellResultToTrade(updated.id, sell);
-        this.store.applyPartialSell(updated.id, sell.tokensSold, sell.proceedsUsd, trade, decision.tpIndex!);
-      } else if (decision.kind === "full-close") {
-        this.fullCloses++;
-        if (decision.reason === "rug-pull") this.rugBroadcasts++;
-        const liq = m.liquidityUsd;
-        const sell = paperExecutor.sell(
-          updated.entryPriceUsd,
-          updated.currentPriceUsd,
-          updated.remainingTokens,
-          liq,
-          decision.reason!,
-        );
-        const trade = sellResultToTrade(updated.id, sell);
-        this.store.closeFully(updated.id, sell.proceedsUsd, trade, decision.reason!);
-        this.atCurveStartSince.delete(updated.id);
-        continue;
-      }
-      this.store.emitUpdate(updated.id);
+      if (rec) this.step(rec, now, true);
     }
+    const open = new Set(this.store.list().map((p) => p.tokenMint));
+    for (const mint of this.curve.keys()) if (!open.has(mint)) this.curve.delete(mint);
+  }
+
+  /** One position against its price now: take a profit, close it, or hold. */
+  private step(rec: PositionRecord, now: number, notify: boolean): void {
+    const p = rec.position;
+    const wallElapsed = now - p.openedAt;
+    const simElapsed = wallElapsed * this.timeScale;
+    const m = this.marketFor(rec, simElapsed);
+    if (!m) {
+      this.handleUnpriced(rec, now, simElapsed);
+      return;
+    }
+    this.unpricedSince.delete(p.id);
+    const updated = this.store.tickPrice(p.id, m.priceUsd);
+    if (!updated) return;
+
+    let decision = this.evaluate(updated, simElapsed, m.rugAt);
+    if (decision.kind === "none" && this.isDeadOnCurve(rec, now)) {
+      decision = { kind: "full-close", reason: "dead-coin" };
+    }
+    if (decision.kind === "partial-tp") {
+      this.partialFills++;
+      const liq = m.liquidityUsd;
+      const sell = paperExecutor.sell(
+        updated.entryPriceUsd,
+        updated.currentPriceUsd,
+        decision.tokensToSell!,
+        liq,
+        decision.reason!,
+      );
+      const trade = sellResultToTrade(updated.id, sell);
+      this.store.applyPartialSell(updated.id, sell.tokensSold, sell.proceedsUsd, trade, decision.tpIndex!);
+    } else if (decision.kind === "full-close") {
+      this.fullCloses++;
+      if (decision.reason === "rug-pull") this.rugBroadcasts++;
+      const liq = m.liquidityUsd;
+      const sell = paperExecutor.sell(
+        updated.entryPriceUsd,
+        updated.currentPriceUsd,
+        updated.remainingTokens,
+        liq,
+        decision.reason!,
+      );
+      const trade = sellResultToTrade(updated.id, sell);
+      this.store.closeFully(updated.id, sell.proceedsUsd, trade, decision.reason!);
+      this.atCurveStartSince.delete(updated.id);
+      return;
+    }
+    if (notify) this.store.emitUpdate(updated.id);
   }
 
   /**

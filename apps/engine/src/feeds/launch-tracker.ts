@@ -5,9 +5,10 @@ import { decodePumpCreateEvent, decodeTradeEvents, isSolPaired } from "./parsers
 const TOTAL_SUPPLY_RAW = 1_000_000_000_000_000n;
 // a bundle lands with the create in its slot; the slot after catches its stragglers
 const LAUNCH_SLOTS = 1;
-const FORGET_AFTER_MS = 15 * 60_000;
+// long enough to keep pricing a position through its exits
+const FORGET_AFTER_MS = 45 * 60_000;
 // a breakout this late is not a launch any more
-const BREAKOUT_WINDOW_MS = FORGET_AFTER_MS;
+const BREAKOUT_WINDOW_MS = 15 * 60_000;
 
 interface Launch {
   slot: number;
@@ -48,6 +49,8 @@ export interface BreakoutRule {
 
 interface TrackerEvents {
   breakout: (mint: string) => void;
+  // every trade on a tracked curve: its price and virtual SOL depth after the trade
+  price: (mint: string, priceSol: number, virtualSol: number) => void;
 }
 
 export declare interface LaunchTracker {
@@ -106,8 +109,10 @@ export class LaunchTracker extends EventEmitter {
         l.launchBuyers.set(t.user, t.tokenAmount);
       }
       if (t.virtualTokenReserves > 0n) {
-        const priceSol = Number(t.virtualSolReserves) / 1e9 / (Number(t.virtualTokenReserves) / 1e6);
+        const virtualSol = Number(t.virtualSolReserves) / 1e9;
+        const priceSol = virtualSol / (Number(t.virtualTokenReserves) / 1e6);
         this.checkBreakout(t.mint, l, priceSol, slot, now);
+        this.emit("price", t.mint, priceSol, virtualSol);
       }
     }
     if (now - this.lastSweep > 60_000) this.sweep(now);
