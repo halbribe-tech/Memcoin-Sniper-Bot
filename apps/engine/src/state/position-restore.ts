@@ -1,4 +1,4 @@
-import type { DexSource, ExitReason, Position, PoolEvent, TPLevel, Trade } from "@sniperbot/shared";
+import type { DexSource, ExitReason, Position, PoolEvent, TokenInfo, TPLevel, Trade } from "@sniperbot/shared";
 import { env } from "../config/env.js";
 import { childLogger } from "../utils/logger.js";
 import { buildProfile } from "../execution/price-simulator.js";
@@ -40,7 +40,7 @@ export interface OpenPositionRow {
   tpLadder: unknown;
   stopLossPct: number;
   openedAt: Date;
-  pool: { poolAddress: string; source: string; signature: string; initialLiquidityUsd: number };
+  pool: { poolAddress: string; source: string; signature: string; initialLiquidityUsd: number; rawEvent?: unknown };
   trades: TradeRow[];
 }
 
@@ -98,6 +98,7 @@ export function rebuildPosition(row: OpenPositionRow, s: ExitSettings): { positi
   const peakPriceUsd = Math.max(row.peakPriceUsd, currentPriceUsd);
   const peakGainPct = ((peakPriceUsd - row.entryPriceUsd) / row.entryPriceUsd) * 100;
   const unrealizedPnlPct = ((currentPriceUsd - row.entryPriceUsd) / row.entryPriceUsd) * 100;
+  const token = (row.pool.rawEvent as { token?: TokenInfo } | null | undefined)?.token;
 
   return {
     trades,
@@ -105,6 +106,9 @@ export function rebuildPosition(row: OpenPositionRow, s: ExitSettings): { positi
       id: row.id,
       poolAddress: row.pool.poolAddress,
       tokenMint: row.tokenMint,
+      tokenSymbol: token?.symbol,
+      tokenName: token?.name,
+      tokenMetadataUri: token?.metadataUri,
       source: toShared(row.pool.source),
       mode: row.mode,
       entryPriceUsd: row.entryPriceUsd,

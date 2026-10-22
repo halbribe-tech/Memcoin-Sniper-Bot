@@ -11,7 +11,8 @@ export type FilterId =
   | "social-signal"
   | "volume-velocity"
   | "anti-sniper-war"
-  | "curve-momentum";
+  | "curve-momentum"
+  | "narrative";
 
 export const FILTER_LABELS: Record<FilterId, string> = {
   "liquidity-min": "Liquidity",
@@ -27,6 +28,7 @@ export const FILTER_LABELS: Record<FilterId, string> = {
   "volume-velocity": "Volume",
   "anti-sniper-war": "Sniper War",
   "curve-momentum": "Momentum",
+  narrative: "Narrative",
 };
 
 export const FILTER_ORDER: FilterId[] = [
@@ -43,6 +45,7 @@ export const FILTER_ORDER: FilterId[] = [
   "curve-momentum",
   "volume-velocity",
   "social-signal",
+  "narrative",
 ];
 
 /**

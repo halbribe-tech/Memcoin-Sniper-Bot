@@ -10,8 +10,13 @@ import type { PnlTracker } from "../analytics/pnl-tracker.js";
 import type { DrawdownCircuit } from "../risk/drawdown-circuit.js";
 import { filterConfig } from "../config/filter-config.js";
 import { curveGainNow } from "../filters/curve-momentum.js";
+import { launchTracker } from "../feeds/launch-tracker.js";
+import { curveBuyQuote } from "./curve-quote.js";
 
 const log = childLogger("trader");
+
+// a curve last traded this long ago may have moved; ask Jupiter instead
+const CURVE_FRESH_MS = 30_000;
 
 export class Trader {
   private readonly store: PositionStore;
@@ -176,17 +181,20 @@ export class Trader {
     if (!synthetic && (await this.fadedSinceVerdict(pool))) return false;
     let market: EntryMarket | undefined;
     if (!synthetic) {
-      // Enter at what a real buy of this size would pay, and only when the
-      // price index agrees — an index 114× too high once cost a whole position.
-      const entry = this.feed
-        ? await this.feed.entryQuote(pool.tokenMint, sizeUsd)
-        : { ok: false as const, reason: "no market feed" };
-      if (!entry.ok) {
-        this.skippedNoPrice++;
-        log.warn({ mint: pool.tokenMint.slice(0, 8), reason: entry.reason }, "no trustworthy entry price — not trading it");
-        return false;
+      market = (await this.curveEntry(pool, sizeUsd)) ?? undefined;
+      if (!market) {
+        // Enter at what a real buy of this size would pay, and only when the
+        // price index agrees — an index 114× too high once cost a whole position.
+        const entry = this.feed
+          ? await this.feed.entryQuote(pool.tokenMint, sizeUsd)
+          : { ok: false as const, reason: "no market feed" };
+        if (!entry.ok) {
+          this.skippedNoPrice++;
+          log.warn({ mint: pool.tokenMint.slice(0, 8), reason: entry.reason }, "no trustworthy entry price — not trading it");
+          return false;
+        }
+        market = { priceUsd: entry.priceUsd, liquidityUsd: entry.liquidityUsd, priceIncludesImpact: true };
       }
-      market = { priceUsd: entry.priceUsd, liquidityUsd: entry.liquidityUsd, priceIncludesImpact: true };
     }
     if (!this.enabled) {
       // switched off while the price was being fetched
@@ -202,13 +210,15 @@ export class Trader {
       return false;
     }
 
-    const tokenSymbol = (pool.rawEvent as { name?: string } | undefined)?.name;
+    const tokenSymbol = pool.token?.symbol ?? (pool.rawEvent as { name?: string } | undefined)?.name;
     const positionId = randomUUID();
     const position: Position = {
       id: positionId,
       poolAddress: pool.poolAddress,
       tokenMint: pool.tokenMint,
       tokenSymbol,
+      tokenName: pool.token?.name,
+      tokenMetadataUri: pool.token?.metadataUri,
       source: pool.source,
       mode: env.MODE,
       entryPriceUsd: result.effectivePriceUsd,
@@ -238,6 +248,19 @@ export class Trader {
 
     this.store.add(position, profile, buyTrade);
     return true;
+  }
+
+  /**
+   * A pump.fun buy priced off the curve itself, from the reserves after the
+   * last trade the stream saw; null when there is no fresh curve to read.
+   */
+  private async curveEntry(pool: PoolEvent, sizeUsd: number): Promise<EntryMarket | null> {
+    if (pool.source !== "pumpfun" || !this.feed) return null;
+    const curve = launchTracker.curveState(pool.tokenMint);
+    if (!curve || Date.now() - curve.at > CURVE_FRESH_MS) return null;
+    const solUsd = await this.feed.solPriceUsd();
+    const quote = solUsd ? curveBuyQuote(curve, sizeUsd, solUsd) : null;
+    return quote ? { ...quote, priceIncludesImpact: true } : null;
   }
 
   /**

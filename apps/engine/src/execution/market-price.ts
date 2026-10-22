@@ -175,6 +175,14 @@ export class MarketFeed {
     return this.latest.get(mint);
   }
 
+  /** SOL's USD price: the last polled one when under a minute old, else asked for now. */
+  async solPriceUsd(): Promise<number | null> {
+    const cached = this.latest.get(SOL_MINT);
+    if (cached && Date.now() - cached.at < 60_000) return cached.priceUsd;
+    const fresh = (await this.fetcher([SOL_MINT])).get(SOL_MINT);
+    return fresh ? fresh.priceUsd : null;
+  }
+
   /**
    * The price to enter at, now: what a real buy of `sizeUsd` would pay, taken
    * only when the price index agrees with it — the index is what every exit

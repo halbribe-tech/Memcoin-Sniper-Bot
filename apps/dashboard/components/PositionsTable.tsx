@@ -1,9 +1,10 @@
 "use client";
 
 import { useFeedStore } from "@/lib/store";
-import { formatPriceUsd, formatRelativeTime, formatUsd, shortAddress } from "@/lib/format";
+import { formatPriceUsd, formatRelativeTime, formatUsd } from "@/lib/format";
 import type { Position } from "@sniperbot/shared";
 import { useMemo } from "react";
+import { TokenCell } from "./TokenCell";
 
 export function PositionsTable() {
   const openMap = useFeedStore((s) => s.openPositions);
@@ -59,10 +60,7 @@ function PositionRow({ position: p }: { position: Position }) {
   return (
     <tr className="border-t border-border hover:bg-bg-elevated/50">
       <td className="px-3 py-2">
-        <div className="flex flex-col leading-tight">
-          <span className="font-semibold">{p.tokenSymbol ?? "?"}</span>
-          <span className="text-[10px] text-fg-subtle">{shortAddress(p.tokenMint)}</span>
-        </div>
+        <TokenCell mint={p.tokenMint} name={p.tokenName} symbol={p.tokenSymbol} metadataUri={p.tokenMetadataUri} />
       </td>
       <td className="px-3 py-2 text-fg-muted">{p.source}</td>
       <td className="px-3 py-2 text-right tabular-nums">{formatUsd(p.entrySizeUsd)}</td>

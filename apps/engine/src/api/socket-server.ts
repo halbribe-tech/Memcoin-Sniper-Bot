@@ -37,6 +37,7 @@ import {
   savePreset,
 } from "../state/filter-presets.js";
 import { filterConfig } from "../config/filter-config.js";
+import { resolveTokenImage } from "../feeds/token-metadata.js";
 
 const log = childLogger("socket-server");
 
@@ -86,6 +87,7 @@ export interface ClientToServerEvents {
   ) => void;
   "bot:set": (on: boolean, ack: (result: { ok: boolean; botOn: boolean; error?: string }) => void) => void;
   "stats:reset": (ack: (result: { ok: boolean; error?: string }) => void) => void;
+  "token:image": (metadataUri: string, ack: (imageUrl: string | null) => void) => void;
 }
 
 export interface SystemStatus {
@@ -303,6 +305,12 @@ export class SocketServer {
         this.io.emit("stats:reset");
         this.io.emit("system:status", this.buildStatus());
         this.io.emit("bankroll:snapshot", this.pnl.buildSnapshot());
+      });
+
+      socket.on("token:image", async (metadataUri, ack) => {
+        const reply = typeof ack === "function" ? ack : () => undefined;
+        if (typeof metadataUri !== "string" || metadataUri.length > 500) return reply(null);
+        reply(await resolveTokenImage(metadataUri));
       });
 
       socket.on("disconnect", (reason) => {

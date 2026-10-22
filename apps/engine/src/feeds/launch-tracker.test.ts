@@ -1,4 +1,4 @@
-import { describe, test } from "node:test";
+import { after, describe, test } from "node:test";
 import assert from "node:assert/strict";
 import { Keypair, PublicKey } from "@solana/web3.js";
 import type { PoolEvent } from "@sniperbot/shared";
@@ -6,6 +6,7 @@ import { LaunchTracker, launchTracker } from "./launch-tracker.js";
 import { decodePumpCreateEvent } from "./parsers/pumpfun-event.js";
 import { bundledLaunchFilter } from "../filters/bundled-launch.js";
 import type { FilterContext } from "../filters/types.js";
+import { env } from "../config/env.js";
 
 // a real create_v2 with the dev's 0.99 SOL buy in the same transaction
 const CREATE_WITH_DEV_BUY = [
@@ -73,6 +74,12 @@ describe("bundled-launch on tracked launches", () => {
   const pool = { source: "pumpfun", tokenMint: MINT, poolAddress: MINT } as PoolEvent;
 
   test("rejects while launch-slot buyers hold 15%+, passes once they have sold down, rejects a selling dev", async () => {
+    // the thresholds the test is written for, whatever .env says
+    const limits = env as { FILTER_BUNDLE_MAX_SUPPLY_PCT: number; FILTER_DEV_MAX_SOLD_PCT: number };
+    const before = { ...limits };
+    limits.FILTER_BUNDLE_MAX_SUPPLY_PCT = 15;
+    limits.FILTER_DEV_MAX_SOLD_PCT = 50;
+    after(() => Object.assign(limits, { FILTER_BUNDLE_MAX_SUPPLY_PCT: before.FILTER_BUNDLE_MAX_SUPPLY_PCT, FILTER_DEV_MAX_SOLD_PCT: before.FILTER_DEV_MAX_SOLD_PCT }));
     launchTracker.ingest(CREATE_WITH_DEV_BUY, SLOT);
     const sniper = wallet();
     launchTracker.ingest(trade(sniper, true, 200_000_000n), SLOT);

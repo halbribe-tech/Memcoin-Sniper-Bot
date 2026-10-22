@@ -86,6 +86,7 @@ export interface ClientToServerEvents {
   ) => void;
   "bot:set": (on: boolean, ack: (result: { ok: boolean; botOn: boolean; error?: string }) => void) => void;
   "stats:reset": (ack: (result: { ok: boolean; error?: string }) => void) => void;
+  "token:image": (metadataUri: string, ack: (imageUrl: string | null) => void) => void;
 }
 
 export type SniperSocket = Socket<ServerToClientEvents, ClientToServerEvents>;

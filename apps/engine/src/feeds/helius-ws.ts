@@ -29,11 +29,12 @@ interface HeliusLogStreamEvents {
 // pump.fun alone sends ~200 logs a second: a minute without one is a dead socket
 const SILENCE_MS = 60_000;
 const RECONNECT_INTERVAL_MS = 10_000;
+const UNSUBSCRIBE_TIMEOUT_MS = 3_000;
 
 interface ReconnectingSocket {
-  setAutoReconnect(on: boolean): void;
   setReconnectInterval(ms: number): void;
-  close(): void;
+  // the underlying ws socket, undefined between reconnects
+  socket?: { terminate?(): void };
 }
 
 /** web3.js keeps its rpc-websockets client private; this is the only handle on reconnects. */
@@ -116,14 +117,19 @@ export class HeliusLogStream extends EventEmitter {
       ? `${env.HELIUS_WS_URL}${env.HELIUS_API_KEY}`
       : env.HELIUS_WS_URL;
 
-    this.connection = new Connection(rpcUrl, {
-      wsEndpoint: wsUrl,
-      commitment: "processed",
-      fetch: meteredFetch,
-    });
-    // web3.js retries a refused socket every second, forever: against a 429
-    // that hammering keeps the rate limit in force. Every 10s gives it room.
-    socketOf(this.connection)?.setReconnectInterval(RECONNECT_INTERVAL_MS);
+    // One connection for the stream's whole life: every start used to open a
+    // new socket and leave the old one reconnecting, against a limit of 5 on
+    // Helius's free plan. web3.js closes the socket itself once idle.
+    if (!this.connection) {
+      this.connection = new Connection(rpcUrl, {
+        wsEndpoint: wsUrl,
+        commitment: "processed",
+        fetch: meteredFetch,
+      });
+      // web3.js retries a refused socket every second, forever: against a 429
+      // that hammering keeps the rate limit in force. Every 10s gives it room.
+      socketOf(this.connection)?.setReconnectInterval(RECONNECT_INTERVAL_MS);
+    }
 
     log.info(
       { sources: this.targets.map((t) => t.source) },
@@ -156,7 +162,7 @@ export class HeliusLogStream extends EventEmitter {
     this.started = true;
     this.startedAt = Date.now();
     this.dedupeTimer = setInterval(() => this.cleanupDedupe(), this.DEDUPE_TTL_MS);
-    this.silenceTimer = setInterval(() => void this.reconnectIfSilent(), SILENCE_MS / 2);
+    this.silenceTimer = setInterval(() => this.reconnectIfSilent(), SILENCE_MS / 2);
     this.emit("ready");
     log.info({ subscriptions: this.subscriptionIds.length }, "Helius log stream live");
   }
@@ -187,11 +193,22 @@ export class HeliusLogStream extends EventEmitter {
     this.emit("log", event);
   }
 
-  private async reconnectIfSilent(): Promise<void> {
+  /**
+   * A socket can die without a close event: Solana's public endpoint went
+   * quiet after a few minutes and resubscribing on it delivered nothing. Cut
+   * it hard instead, without unsubscribing: web3.js reads an abnormal close
+   * as a drop, marks every subscription pending, and reconnects and
+   * resubscribes on a fresh socket by itself.
+   */
+  private reconnectIfSilent(): void {
     if (!this.started || this.isReady()) return;
-    log.warn({ silentSec: Math.round((Date.now() - Math.max(this.lastLogAt, this.startedAt)) / 1000) }, "no logs — reconnecting");
-    await this.stop();
-    await this.start();
+    log.warn(
+      { silentSec: Math.round((Date.now() - Math.max(this.lastLogAt, this.startedAt)) / 1000) },
+      "no logs — dropping the socket so web3.js reconnects",
+    );
+    // a fresh minute before judging the new socket
+    this.startedAt = Date.now();
+    socketOf(this.connection)?.socket?.terminate?.();
   }
 
   private cleanupDedupe(): void {
@@ -205,18 +222,19 @@ export class HeliusLogStream extends EventEmitter {
     if (!this.connection) return;
     for (const id of this.subscriptionIds) {
       try {
-        await this.connection.removeOnLogsListener(id);
+        // Solana's public endpoint can leave an unsubscribe unanswered, which
+        // held "bot off" open forever; the socket is closed below regardless.
+        await Promise.race([
+          this.connection.removeOnLogsListener(id),
+          new Promise((_, reject) => setTimeout(() => reject(new Error("unsubscribe timed out")), UNSUBSCRIBE_TIMEOUT_MS)),
+        ]);
       } catch (err) {
-        log.warn({ err, id }, "Failed to remove subscription");
+        log.warn({ err: (err as Error).message, id }, "Failed to remove subscription");
       }
     }
     this.subscriptionIds = [];
-    // Removing the subscriptions leaves the socket reconnecting on its own;
-    // each start used to add one more, against a limit of 5 on the free plan.
-    const socket = socketOf(this.connection);
-    socket?.setAutoReconnect(false);
-    socket?.close();
-    this.connection = null;
+    // The socket is left to web3.js. Closing it under a pending unsubscribe
+    // sent web3.js into a retry loop that filled 4 GB of heap in 3 minutes.
     // An interval left running keeps the process alive after "Goodbye.".
     if (this.dedupeTimer) clearInterval(this.dedupeTimer);
     this.dedupeTimer = null;

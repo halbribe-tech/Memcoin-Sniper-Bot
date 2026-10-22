@@ -63,6 +63,7 @@ describe("pump.fun CreateEvent", () => {
     assert.equal(pool.source, "pumpfun");
     assert.equal(pool.tokenMint, e.mint);
     assert.equal(pool.creatorWallet, e.user);
+    assert.deepEqual(pool.token, { name: e.name, symbol: e.symbol, metadataUri: e.uri });
     assert.deepEqual(pool.rawEvent, { curveStartPriceSol: curveStartPriceSol(e), launchPriceSol: curveStartPriceSol(e) });
   });
 

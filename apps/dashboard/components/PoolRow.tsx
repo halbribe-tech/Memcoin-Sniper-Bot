@@ -6,6 +6,7 @@ import { ChevronDown, ChevronRight, ExternalLink } from "lucide-react";
 import { formatPriceUsd, formatRelativeTime, formatUsd, shortAddress } from "@/lib/format";
 import { FilterPills } from "./FilterPills";
 import { DecisionBadge } from "./DecisionBadge";
+import { TokenCell } from "./TokenCell";
 import { useFeedStore } from "@/lib/store";
 
 const SOURCE_STYLES: Record<string, { label: string; cls: string }> = {
@@ -73,7 +74,12 @@ function PoolRowImpl({ pool, verdict, isNew }: PoolRowProps) {
           <div className="col-span-12 sm:col-span-5 lg:col-span-5 min-w-0 flex flex-col gap-1.5">
             <div className="flex items-center gap-2 min-w-0">
               <DecisionBadge decision={verdict?.decision} score={verdict?.totalScore} />
-              <code className="truncate font-mono text-xs text-fg">{pool.tokenMint}</code>
+              <TokenCell
+                mint={pool.tokenMint}
+                name={pool.token?.name}
+                symbol={pool.token?.symbol}
+                metadataUri={pool.token?.metadataUri}
+              />
             </div>
             <div className="flex items-center gap-2 min-w-0 text-fg-muted">
               <span className="text-[10px] uppercase tracking-wider text-fg-subtle">DEV</span>

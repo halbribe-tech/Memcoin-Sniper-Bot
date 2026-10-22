@@ -148,6 +148,8 @@ export class PoolDetector extends EventEmitter {
           creatorWallet: event.creatorWallet,
           detectedAt: new Date(event.detectedAt),
           signature: event.signature,
+          // name, ticker and metadata link, so a restored position can show them
+          rawEvent: event.token ? ({ token: { ...event.token } } as object) : undefined,
         },
         update: {},
       });

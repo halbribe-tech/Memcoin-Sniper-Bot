@@ -7,6 +7,7 @@ import type { PnlTracker } from "../analytics/pnl-tracker.js";
 import type { DrawdownCircuit } from "../risk/drawdown-circuit.js";
 import type { EntryQuote, MarketFeed } from "./market-price.js";
 import { PUMPFUN_START_PRICE_SOL } from "../feeds/parsers/pumpfun.js";
+import { launchTracker } from "../feeds/launch-tracker.js";
 
 const verdict = { decision: "snipe", poolAddress: "P", totalScore: 90 } as OrchestratorVerdict;
 const pool = { poolAddress: "P", tokenMint: "MintMintMint" } as PoolEvent;
@@ -164,5 +165,53 @@ describe("momentum at the buy", () => {
     await trader.handleVerdict({ ...verdict, poolAddress: "Rising1" }, pumpPool("Rising1"));
     assert.equal(added.length, 1);
     assert.equal(trader.getStats().skippedFaded, 0);
+  });
+});
+
+describe("entry price from the curve", () => {
+  const realRandom = Math.random;
+  const realCurveState = launchTracker.curveState.bind(launchTracker);
+  beforeEach(() => {
+    Math.random = () => 0.5;
+  });
+  afterEach(() => {
+    Math.random = realRandom;
+    launchTracker.curveState = realCurveState;
+  });
+
+  function trader(jupiter: EntryQuote) {
+    const added: Position[] = [];
+    let quoted = 0;
+    const store = { count: () => added.length, add: (p: Position) => added.push(p) } as unknown as PositionStore;
+    const pnl = { buildSnapshot: () => ({ openExposureUsd: 0, balanceUsd: 10_000 }) } as unknown as PnlTracker;
+    const circuit = { canTrade: () => ({ allowed: true }) } as unknown as DrawdownCircuit;
+    const feed = {
+      solPriceUsd: async () => 100,
+      entryQuote: async () => {
+        quoted++;
+        return jupiter;
+      },
+    } as unknown as MarketFeed;
+    const t = new Trader(store, pnl, circuit, feed);
+    t.setEnabled(true);
+    return { t, added, quoted: () => quoted };
+  }
+  const pool = { poolAddress: "C1", tokenMint: "C1", source: "pumpfun", initialPriceUsd: 0.000003, initialLiquidityUsd: 5400, detectedAt: 0 } as PoolEvent;
+
+  test("a fresh curve prices the buy itself, so a lagging Jupiter index cannot refuse it", async () => {
+    launchTracker.curveState = () => ({ virtualSolLamports: 60_000_000_000n, virtualTokenRaw: 536_500_000_000_000n, at: Date.now() });
+    const { t, added, quoted } = trader({ ok: false, reason: "price index and a real buy disagree by 34%" });
+    await t.handleVerdict({ ...verdict, poolAddress: "C1" }, pool);
+    assert.equal(quoted(), 0);
+    assert.equal(added.length, 1);
+    // a curve at 60 SOL / 536.5M tokens trades at ~$0.0000112 at $100 a SOL
+    assert.ok(added[0]!.entryPriceUsd > 0.0000112 && added[0]!.entryPriceUsd < 0.0000125);
+  });
+
+  test("a curve last traded long ago falls back to Jupiter", async () => {
+    launchTracker.curveState = () => ({ virtualSolLamports: 60_000_000_000n, virtualTokenRaw: 536_500_000_000_000n, at: Date.now() - 60_000 });
+    const { t, quoted } = trader({ ok: false, reason: "no market price" });
+    await t.handleVerdict({ ...verdict, poolAddress: "C1" }, pool);
+    assert.equal(quoted(), 1);
   });
 });

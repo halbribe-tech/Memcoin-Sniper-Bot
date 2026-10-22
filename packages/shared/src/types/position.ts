@@ -14,6 +14,8 @@ export interface Position {
   poolAddress: string;
   tokenMint: string;
   tokenSymbol?: string;
+  tokenName?: string;
+  tokenMetadataUri?: string;
   source: string;
   mode: "paper" | "live";
   entryPriceUsd: number;

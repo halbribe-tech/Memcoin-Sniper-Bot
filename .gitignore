@@ -95,3 +95,8 @@ redis-data/
 *.bak
 *.backup
 *.orig
+
+# =====================================================
+# Narrative scorer: the live meta list is generated data
+# =====================================================
+apps/narrative/data/

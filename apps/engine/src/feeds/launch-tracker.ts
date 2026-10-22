@@ -23,6 +23,15 @@ interface Launch {
   // non-dev wallets that bought in the launch slots → tokens they still hold
   launchBuyers: Map<string, bigint>;
   brokeOut: boolean;
+  // the curve's virtual reserves after the last trade the stream delivered
+  curve: CurveState;
+}
+
+/** A pump.fun curve's virtual reserves, as of `at`. */
+export interface CurveState {
+  virtualSolLamports: bigint;
+  virtualTokenRaw: bigint;
+  at: number;
 }
 
 /** What a launch's first buyers did, as of now. */
@@ -93,6 +102,7 @@ export class LaunchTracker extends EventEmitter {
         devHeld: 0n,
         launchBuyers: new Map(),
         brokeOut: false,
+        curve: { virtualSolLamports: created.virtualSolReserves, virtualTokenRaw: created.virtualTokenReserves, at: now },
       });
     }
     for (const t of decodeTradeEvents(logs)) {
@@ -109,6 +119,7 @@ export class LaunchTracker extends EventEmitter {
         l.launchBuyers.set(t.user, t.tokenAmount);
       }
       if (t.virtualTokenReserves > 0n) {
+        l.curve = { virtualSolLamports: t.virtualSolReserves, virtualTokenRaw: t.virtualTokenReserves, at: now };
         const virtualSol = Number(t.virtualSolReserves) / 1e9;
         const priceSol = virtualSol / (Number(t.virtualTokenReserves) / 1e6);
         this.checkBreakout(t.mint, l, priceSol, slot, now);
@@ -131,6 +142,11 @@ export class LaunchTracker extends EventEmitter {
       devSoldPct: pct(devSold > 0n ? devSold : 0n, l.devBought),
       buySol: Number(l.buyLamports) / 1e9,
     };
+  }
+
+  /** The curve's reserves after the last trade seen on it, or null when this run never saw the launch. */
+  curveState(mint: string): CurveState | null {
+    return this.launches.get(mint)?.curve ?? null;
   }
 
   private checkBreakout(mint: string, l: Launch, priceSol: number, slot: number, now: number): void {

@@ -45,6 +45,7 @@ export function poolEventFromCreate(
     creatorWallet: e.user,
     detectedAt,
     signature,
+    token: { name: e.name, symbol: e.symbol, metadataUri: e.uri },
     rawEvent: {
       curveStartPriceSol: startPriceSol,
       // what momentum is measured from: the price once the dev's own buy is in

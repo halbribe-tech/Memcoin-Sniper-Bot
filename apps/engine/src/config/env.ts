@@ -106,6 +106,12 @@ const envSchema = z.object({
   // % a pump.fun price must sit over its launch price (after the dev's buy)
   FILTER_CURVE_GAIN_MIN_PCT: z.coerce.number().min(0).default(20),
   FILTER_MIN_FILTER_SCORE: z.coerce.number().min(0).max(100),
+  // Narrative filter (score from apps/narrative via Redis key narrative:<mint>).
+  // "shadow": recorded only, never rejects and never moves the score.
+  // "gate": rejects below NARRATIVE_MIN_SCORE and counts with NARRATIVE_FILTER_WEIGHT.
+  NARRATIVE_FILTER_MODE: z.enum(["shadow", "gate"]).default("shadow"),
+  NARRATIVE_FILTER_WEIGHT: z.coerce.number().min(0).default(0),
+  NARRATIVE_MIN_SCORE: z.coerce.number().min(0).max(100).default(50),
 
   // Execution
   JITO_TIP_LAMPORTS: z.coerce.number().int().nonnegative(),
