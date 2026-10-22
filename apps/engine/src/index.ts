@@ -1,3 +1,4 @@
+import type { PoolEvent } from "@sniperbot/shared";
 import { env, isPaperMode } from "./config/env.js";
 import { logger } from "./utils/logger.js";
 import { closeRedis, pingRedis } from "./state/redis.js";
@@ -118,8 +119,37 @@ async function main() {
   // Synthetic pools carry their answers and are judged at once.
   // Bumped by a stats reset: a pool detected before it is not judged after it.
   let statsGeneration = 0;
+  // In breakout mode a pump.fun launch waits here until its curve breaks out.
+  const awaitingBreakout = new Map<string, { event: PoolEvent; generation: number; at: number }>();
+  const breakoutMode = env.ENTRY_MODE === "breakout";
+  if (breakoutMode) {
+    launchTracker.setBreakoutRule({
+      multiple: env.BREAKOUT_MULTIPLE,
+      minAgeSec: env.BREAKOUT_MIN_AGE_SEC,
+      minBuySol: env.BREAKOUT_MIN_BUY_SOL,
+      maxDevSoldPct: env.BREAKOUT_MAX_DEV_SOLD_PCT,
+    });
+    launchTracker.on("breakout", (mint) => {
+      const waiting = awaitingBreakout.get(mint);
+      if (!waiting) return;
+      awaitingBreakout.delete(mint);
+      if (waiting.generation !== statsGeneration) return;
+      logger.info({ mint: mint.slice(0, 8), ageSec: Math.round((Date.now() - waiting.at) / 1000) }, "breakout — judging now");
+      trader.cachePool(waiting.event);
+      void orchestrator.evaluate(waiting.event);
+    });
+    setInterval(() => {
+      const cutoff = Date.now() - 20 * 60_000;
+      for (const [mint, w] of awaitingBreakout) if (w.at < cutoff) awaitingBreakout.delete(mint);
+    }, 60_000).unref();
+  }
+
   detector.on("pool", (event) => {
     const generation = statsGeneration;
+    if (breakoutMode && event.source === "pumpfun" && !isSyntheticPool(event)) {
+      awaitingBreakout.set(event.tokenMint, { event, generation, at: event.detectedAt });
+      return;
+    }
     const judge = () => {
       if (generation !== statsGeneration) return;
       trader.cachePool(event);
@@ -185,6 +215,7 @@ async function main() {
     if (trader.isEntering()) throw new Error("a buy is still being priced — try again in a few seconds");
     await wipeStoredStats();
     statsGeneration++;
+    awaitingBreakout.clear();
     positionStore.reset();
     pnl.reset();
     circuit.reset();

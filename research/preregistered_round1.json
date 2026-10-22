@@ -1,0 +1,11 @@
+{
+  "registered_at_ms": 1792628885641,
+  "note": "Rules fixed before seeing any launch created after registered_at_ms. Evaluate only on those launches.",
+  "rules": [
+    {"id": "A", "trigger": ["L", 2],   "filter": "users>=29 and top10<33.23", "exits": "TP 30/50 run, SL-20, trail 30/20"},
+    {"id": "B", "trigger": ["L", 2],   "filter": "users>=29",                 "exits": "TP1 40/100 SL-20"},
+    {"id": "C", "trigger": ["L", 2.5], "filter": "dev_sold<100",              "exits": "TP1 50/50 SL-30 hard10"},
+    {"id": "D", "trigger": ["L", 2],   "filter": "dd_peak<11.63 and buy_sol>=27.28", "exits": "moonbag TP100/50 SL-30 trail 50/30"},
+    {"id": "BOT", "trigger": ["T", 90], "filter": "gain_launch>=20 and dev_sold<50 and launch_held<15 and buys>=5 and buys/max(sells,1)>=1.2 and top1<=15 and top10<=35", "exits": "bot default"}
+  ]
+}

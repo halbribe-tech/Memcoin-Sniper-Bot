@@ -36,6 +36,14 @@ const envSchema = z.object({
   JUPITER_PRICE_API: z.string().url().default("https://lite-api.jup.ag/price/v3"),
   // seconds between a pool appearing and its filters running; 0 = at once
   EVAL_DELAY_SEC: z.coerce.number().int().min(0).default(90),
+  // "delay": judge every pump.fun launch EVAL_DELAY_SEC after it appears.
+  // "breakout": judge a launch the moment its curve first reaches
+  // BREAKOUT_MULTIPLE × its start price on real buying; other DEXes keep the delay.
+  ENTRY_MODE: z.enum(["delay", "breakout"]).default("delay"),
+  BREAKOUT_MULTIPLE: z.coerce.number().min(1).default(2),
+  BREAKOUT_MIN_AGE_SEC: z.coerce.number().min(0).default(5),
+  BREAKOUT_MIN_BUY_SOL: z.coerce.number().min(0).default(22),
+  BREAKOUT_MAX_DEV_SOLD_PCT: z.coerce.number().min(0).max(100).default(100),
   RUGCHECK_API_BASE: z.string().url().default("https://api.rugcheck.xyz/v1"),
 
   // Data APIs
@@ -66,6 +74,8 @@ const envSchema = z.object({
   TRAILING_STOP_ACTIVATION_PCT: z.coerce.number().positive(),
   // after TP1 the stop moves to the entry price
   BREAKEVEN_AFTER_TP1: boolFromString.default(true),
+  // sell whatever is left this many minutes after the buy, win or lose; 0 = off
+  HARD_EXIT_MIN: z.coerce.number().min(0).default(0),
   // a pump.fun position back at its curve's start price this long is sold; 0 = off
   DEAD_COIN_EXIT_MIN: z.coerce.number().min(0).default(3),
   DEAD_COIN_MAX_GAIN_PCT: z.coerce.number().min(0).default(2),

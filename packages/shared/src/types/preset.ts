@@ -94,6 +94,33 @@ export const BUILT_IN_PRESETS: ReadonlyArray<{
     },
   },
   {
+    name: "Breakout",
+    description:
+      "For ENTRY_MODE=breakout: the entry rule already asks for a doubled curve, 22+ SOL of buying and a dev still holding, so only the cheap safety checks stay on.",
+    config: {
+      enabled: {
+        "honeypot-sim": true,
+        "lp-locked": true,
+        "mint-authority": true,
+        "freeze-authority": true,
+        "bundled-launch": true,
+        "dev-wallet": true,
+        // at 8-20s DexScreener has no pair yet and the curve has just doubled
+        "curve-momentum": false,
+        "volume-velocity": false,
+        "social-signal": false,
+        "liquidity-min": false,
+        // RPC-heavy, and their thresholds were set for coins judged at 90s
+        "top-holders": false,
+        "insider-detection": false,
+        "anti-sniper-war": false,
+      },
+      thresholds: {
+        minFilterScore: 0,
+      },
+    },
+  },
+  {
     name: "Learning",
     description:
       "Honeypot-only gating. Snipes everything else to gather analytics data. Run for a week.",

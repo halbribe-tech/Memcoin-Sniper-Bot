@@ -19,16 +19,17 @@ const SLOT = 1000;
 const M = 1_000_000n; // 1 token in raw units
 
 /** A TradeEvent log line, laid out as pump's IDL writes it. */
-function trade(user: string, isBuy: boolean, tokens: bigint): string[] {
+function trade(user: string, isBuy: boolean, tokens: bigint, opts: { priceX?: number; sol?: number } = {}): string[] {
   const b = Buffer.alloc(113);
   Buffer.from([189, 219, 127, 211, 78, 230, 97, 238]).copy(b, 0);
   decodeKey(MINT).copy(b, 8);
-  b.writeBigUInt64LE(1n, 40);
+  b.writeBigUInt64LE(BigInt(Math.round((opts.sol ?? 0) * 1e9)), 40);
   b.writeBigUInt64LE(tokens * M, 48);
   b[56] = isBuy ? 1 : 0;
   decodeKey(user).copy(b, 57);
-  b.writeBigUInt64LE(30_000_000_000n, 97);
-  b.writeBigUInt64LE(1_000_000_000_000_000n, 105);
+  // reserves putting the curve at priceX × its start (30 SOL / 1.073B tokens)
+  b.writeBigUInt64LE(BigInt(Math.round(30e9 * (opts.priceX ?? 1))), 97);
+  b.writeBigUInt64LE(1_073_000_000_000_000n, 105);
   return [`Program data: ${b.toString("base64")}`];
 }
 const decodeKey = (key: string) => Buffer.from(new PublicKey(key).toBytes());
@@ -89,5 +90,48 @@ describe("bundled-launch on tracked launches", () => {
   test("a coin this run never saw launch is skipped, not passed", async () => {
     const r = await bundledLaunchFilter.evaluate({ ...pool, tokenMint: wallet() }, ctx);
     assert.equal(r.status, "skip");
+  });
+});
+
+describe("breakouts", () => {
+  const rule = { multiple: 2, minAgeSec: 5, minBuySol: 22, maxDevSoldPct: 100 };
+  function tracker() {
+    const t = new LaunchTracker();
+    t.setBreakoutRule(rule);
+    const fired: string[] = [];
+    t.on("breakout", (m) => fired.push(m));
+    t.ingest(CREATE_WITH_DEV_BUY, SLOT, 0);
+    return { t, fired };
+  }
+
+  test("fires once when the curve doubles on 22+ SOL of buying, after 5s", () => {
+    const { t, fired } = tracker();
+    t.ingest(trade(wallet(), true, 10n, { priceX: 1.5, sol: 10 }), SLOT + 5, 3_000);
+    t.ingest(trade(wallet(), true, 10n, { priceX: 2.1, sol: 13 }), SLOT + 10, 4_000);
+    assert.deepEqual(fired, [], "doubled and 23 SOL, but only 4s old");
+    t.ingest(trade(wallet(), true, 10n, { priceX: 2.2, sol: 1 }), SLOT + 20, 8_000);
+    assert.deepEqual(fired, [MINT]);
+    t.ingest(trade(wallet(), true, 10n, { priceX: 3, sol: 5 }), SLOT + 30, 9_000);
+    assert.deepEqual(fired, [MINT], "a launch breaks out once");
+  });
+
+  test("not on thin buying, and not once the dev has sold out", () => {
+    const thin = tracker();
+    thin.t.ingest(trade(wallet(), true, 10n, { priceX: 2.5, sol: 5 }), SLOT + 20, 8_000);
+    assert.deepEqual(thin.fired, [], "5 SOL of buying is not a breakout");
+
+    const sold = tracker();
+    sold.t.ingest(trade(DEV, false, 40_000_000n), SLOT + 2, 2_000);
+    sold.t.ingest(trade(wallet(), true, 10n, { priceX: 2.5, sol: 30 }), SLOT + 20, 8_000);
+    assert.deepEqual(sold.fired, [], "the dev sold their whole buy");
+  });
+
+  test("without a rule nothing fires", () => {
+    const t = new LaunchTracker();
+    const fired: string[] = [];
+    t.on("breakout", (m) => fired.push(m));
+    t.ingest(CREATE_WITH_DEV_BUY, SLOT, 0);
+    t.ingest(trade(wallet(), true, 10n, { priceX: 3, sol: 40 }), SLOT + 20, 8_000);
+    assert.deepEqual(fired, []);
   });
 });

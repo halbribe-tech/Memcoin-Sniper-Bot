@@ -228,6 +228,9 @@ export class ExitEngine {
 
     // 5. Time exit — if no +50% within configured window
     const ageMs = simElapsedMs;
+    if (env.HARD_EXIT_MIN > 0 && ageMs >= env.HARD_EXIT_MIN * 60_000) {
+      return { kind: "full-close", reason: "time-exit" };
+    }
     const exitWindowMs = p.timeExitMin * 60_000;
     if (ageMs >= exitWindowMs && p.peakGainPct < 50) {
       return { kind: "full-close", reason: "time-exit" };

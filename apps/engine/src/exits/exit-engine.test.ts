@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, test } from "node:test";
 import assert from "node:assert/strict";
 import type { Position, Trade } from "@sniperbot/shared";
 import { ExitEngine } from "./exit-engine.js";
+import { env } from "../config/env.js";
 import { PositionStore } from "../state/position-store.js";
 import { MarketFeed, type MarketQuote } from "../execution/market-price.js";
 import { SOL_MINT } from "../feeds/parsers/common.js";
@@ -145,6 +146,23 @@ describe("exits on market prices", () => {
     await feed.poll();
     later(4 * MIN, tick);
     assert.equal(store.count(), 1, "back at the floor for 2 minutes, not 3");
+  });
+
+  test("HARD_EXIT_MIN sells a winner too, once its minutes are up", async () => {
+    const mutable = env as { HARD_EXIT_MIN: number };
+    const before = mutable.HARD_EXIT_MIN;
+    mutable.HARD_EXIT_MIN = 10;
+    try {
+      const { store, feed, tick } = setup(11 * MIN, 1.3);
+      await feed.poll();
+      tick();
+      assert.equal(store.count(), 0);
+      const closed = store.recentlyClosed(1)[0];
+      assert.equal(closed?.closeReason, "time-exit");
+      assert.ok((closed?.realizedPnlUsd ?? 0) > 0, "+30% was taken, not lost");
+    } finally {
+      mutable.HARD_EXIT_MIN = before;
+    }
   });
 
   test("an unpriced position waits inside its window", () => {
