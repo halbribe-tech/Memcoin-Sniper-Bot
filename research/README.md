@@ -31,9 +31,13 @@ research/.venv/bin/python research/oos.py research/launches.jsonl research/prere
 - The bot's settings at the time (90s, curve-momentum ≥20%, bundle check, top holders, TP
   50/100/300/900, SL −40%) lost 22% and 11% per trade on two sets of fresh launches, and 20% per
   trade in live paper trading (40 trades).
-- Breakout entries were the least bad. The 2.5× breakout with the dev still holding came out at
-  −1.1% (round 1) and −1.1% / +0.7% (round 2, two exit sets) on fresh launches. No rule was
-  reliably positive.
-- In live paper trading the 2× breakout rule (ENTRY_MODE=breakout, $25, TP 30/50, SL −20, trail
-  30/20, 10-minute exit, Breakout preset) lost 11% per trade over 19 trades. Its stop-losses
-  filled near −50%, because the curve gaps through the stop between 3-second price polls.
+- Breakout entries were the least bad but still lost. With round 2's rules scored on 5,854
+  launches recorded after they were fixed: 2× breakout with many traders −4.1% per trade
+  (n=192, 90% CI −7.5…−0.6%); 2.5× breakout with the dev still holding −8.0% and −9.0% (two exit
+  sets, n=111); the bot's 90s settings −15.4% (n=32). An earlier near-zero reading on half the
+  data was noise. No rule was reliably positive.
+- In live paper trading, 06:00–07:40, the 2× breakout rule (ENTRY_MODE=breakout, $25, TP 30/50,
+  SL −20, trail 30/20, 10-minute exit, Breakout preset) lost 14% per trade over 38 trades; the
+  90s settings lost 20% per trade over 40 trades and tripped the 10% daily drawdown halt.
+  Breakout stop-losses filled near −50%, because the curve gaps through the stop between
+  3-second price polls.
