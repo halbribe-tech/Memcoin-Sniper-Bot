@@ -29,7 +29,6 @@ const THRESHOLD_FIELDS: Array<{
   { key: "devRugRateMax", label: "Dev rug rate max", min: 0, max: 1, step: 0.05, isPct: true },
   { key: "maxSellTaxPct", label: "Max sell tax", min: 0, max: 100, step: 1, suffix: "%" },
   { key: "curveGainMinPct", label: "Min gain over launch price", min: 0, max: 200, step: 5, suffix: "%" },
-  { key: "narrativeMinScore", label: "Narrative min score (gate mode only)", min: 0, max: 100, step: 5 },
 ];
 
 const TOGGLE_FIELDS: Array<{

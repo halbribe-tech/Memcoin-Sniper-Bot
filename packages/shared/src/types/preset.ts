@@ -20,8 +20,6 @@ export interface FilterConfigDelta {
     bundledLaunchReject?: boolean;
     curveGainMinPct?: number;
     minFilterScore?: number;
-    /** narrative filter: below this score it would reject (only rejects in NARRATIVE_FILTER_MODE=gate) */
-    narrativeMinScore?: number;
   };
 }
 
@@ -47,8 +45,6 @@ export const BUILT_IN_PRESETS: ReadonlyArray<{
       "Strict — only trade pools that pass every critical filter. Lower hit count, higher quality.",
     config: {
       enabled: {
-        // shadow mode (NARRATIVE_FILTER_MODE=shadow): recorded only, never rejects
-        narrative: true,
         "honeypot-sim": true,
         "lp-locked": true,
         "mint-authority": true,
@@ -78,8 +74,6 @@ export const BUILT_IN_PRESETS: ReadonlyArray<{
       "Looser thresholds — more trades, more noise. Use after filter analytics identify winners.",
     config: {
       enabled: {
-        // shadow mode (NARRATIVE_FILTER_MODE=shadow): recorded only, never rejects
-        narrative: true,
         "honeypot-sim": true,
         "lp-locked": true,
         "mint-authority": true,
@@ -105,8 +99,6 @@ export const BUILT_IN_PRESETS: ReadonlyArray<{
       "For ENTRY_MODE=breakout: the entry rule already asks for a doubled curve, 22+ SOL of buying and a dev still holding, so only the cheap safety checks stay on.",
     config: {
       enabled: {
-        // shadow mode (NARRATIVE_FILTER_MODE=shadow): recorded only, never rejects
-        narrative: true,
         "honeypot-sim": true,
         "lp-locked": true,
         "mint-authority": true,
@@ -134,8 +126,6 @@ export const BUILT_IN_PRESETS: ReadonlyArray<{
       "Honeypot-only gating. Snipes everything else to gather analytics data. Run for a week.",
     config: {
       enabled: {
-        // shadow mode (NARRATIVE_FILTER_MODE=shadow): recorded only, never rejects
-        narrative: true,
         "honeypot-sim": true,
         "lp-locked": false,
         "mint-authority": false,

@@ -102,7 +102,6 @@ function buildResolvedConfig(d: FilterConfigDelta): ResolvedFilterConfig {
     bundledLaunchReject: t.bundledLaunchReject ?? env.FILTER_BUNDLED_LAUNCH_REJECT,
     curveGainMinPct: t.curveGainMinPct ?? env.FILTER_CURVE_GAIN_MIN_PCT,
     minFilterScore: t.minFilterScore ?? env.FILTER_MIN_FILTER_SCORE,
-    narrativeMinScore: t.narrativeMinScore ?? env.NARRATIVE_MIN_SCORE,
   };
 }
 
