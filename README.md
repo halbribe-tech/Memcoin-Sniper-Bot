@@ -29,7 +29,7 @@ None of the numbers are real trading results.</sub>
 > around that assumption.
 
 If this project is useful to you, or it just taught you how rugs work, a ⭐ helps other people
-find it.
+find it. Pimmel
 
 <details>
 <summary><b>Contents</b></summary>
