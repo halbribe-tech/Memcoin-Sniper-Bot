@@ -2,13 +2,6 @@ import type { ExitReason } from "./trade.js";
 
 export type PositionStatus = "open" | "partial" | "closed";
 
-export interface TPLevel {
-  gainPct: number;
-  sellPct: number;
-  hit: boolean;
-  hitAt?: number;
-}
-
 export interface Position {
   id: string;
   poolAddress: string;
@@ -28,13 +21,6 @@ export interface Position {
   realizedPnlUsd: number;
   peakPriceUsd: number;
   peakGainPct: number;
-  tpLadder: TPLevel[];
-  stopLossPct: number;
-  trailingStopPct: number;
-  trailingStopActivationPct: number;
-  trailingStopArmed: boolean;
-  timeExitMin: number;
-  filterScore: number;
   openedAt: number;
   closedAt?: number;
   closeReason?: ExitReason;
@@ -54,8 +40,6 @@ export interface PositionUpdateEvent {
   unrealizedPnlPct: number;
   peakPriceUsd: number;
   peakGainPct: number;
-  trailingStopArmed: boolean;
-  tpLadder: TPLevel[];
   remainingTokens: number;
   realizedPnlUsd: number;
   status: PositionStatus;

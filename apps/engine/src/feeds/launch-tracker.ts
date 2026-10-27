@@ -1,22 +1,16 @@
 import { EventEmitter } from "node:events";
 import { decodeCompleteEvents, decodePumpCreateEvent, decodeTradeEvents, isSolPaired } from "./parsers/pumpfun-event.js";
+import type { PumpTradeEvent } from "./parsers/pumpfun-event.js";
 
 // raw units: 1B tokens at 6 decimals
 const TOTAL_SUPPLY_RAW = 1_000_000_000_000_000n;
 // a bundle lands with the create in its slot; the slot after catches its stragglers
 const LAUNCH_SLOTS = 1;
-// long enough to keep pricing a position through its exits
+// long enough to keep pricing a position bought in a launch's first half hour
 const FORGET_AFTER_MS = 45 * 60_000;
-// a breakout this late is not a launch any more
-const BREAKOUT_WINDOW_MS = 15 * 60_000;
 // a curve starts with 1.073B virtual tokens and sells 793.1M of them before it completes
 const INITIAL_VIRTUAL_TOKENS_RAW = 1_073_000_000_000_000n;
 const CURVE_SALE_RAW = 793_100_000_000_000n;
-// the recorded launches that reached a fill level did so within 25 minutes
-const FILL_WINDOW_MS = 25 * 60_000;
-const FILL_MIN_AGE_MS = 5000;
-// copy signals only count while the launch is young enough to have recorded data behind the rule
-const COPY_WINDOW_MS = 30 * 60_000;
 
 /** How much of the curve's sellable supply has been bought, 0-100. */
 export function curveFillPct(virtualTokenRaw: bigint): number {
@@ -28,18 +22,13 @@ interface Launch {
   dev: string;
   seenAt: number;
   startPriceSol: number;
-  // Mayhem and non-SOL coins are dropped by the detector, so they never break out
+  // Mayhem and non-SOL coins are dropped by the detector
   tradable: boolean;
   buyLamports: bigint;
   devBought: bigint;
   devHeld: bigint;
   // non-dev wallets that bought in the launch slots → tokens they still hold
   launchBuyers: Map<string, bigint>;
-  brokeOut: boolean;
-  filled: boolean;
-  // copied wallets that have bought since the create slot
-  copyBuyers: Set<string>;
-  copied: boolean;
   // the curve's virtual reserves after the last trade the stream delivered
   curve: CurveState;
 }
@@ -55,6 +44,8 @@ export interface CurveState {
 
 /** What a launch's first buyers did, as of now. */
 export interface LaunchStats {
+  ageMs: number;
+  startPriceSol: number;
   launchBuyers: number;
   /** % of supply still held by the wallets that bought in the launch slots, dev excluded */
   launchBuyersHeldPct: number;
@@ -63,37 +54,23 @@ export interface LaunchStats {
   devSoldPct: number;
   /** SOL spent on buys since the create, dev included */
   buySol: number;
+  curveFillPct: number;
 }
 
-/** Which wallets copy mode follows, and how many of them make a signal. */
-export interface CopyRule {
-  wallets: ReadonlySet<string>;
-  /** the first count that is worth judging */
-  minWallets: number;
-  /** the count after which no more signals come; defaults to minWallets */
-  strongWallets?: number;
-}
-
-/** When a launch counts as breaking out; null leaves breakouts off. */
-export interface BreakoutRule {
-  /** the curve's price over its start, e.g. 2 = doubled */
-  multiple: number;
-  minAgeSec: number;
-  minBuySol: number;
-  /** the dev may have sold less than this % of their own buy */
-  maxDevSoldPct: number;
+/** One trade on a tracked launch, with the slot it landed in. */
+export interface LaunchTrade extends PumpTradeEvent {
+  slot: number;
+  at: number;
+  priceSol: number;
 }
 
 interface TrackerEvents {
-  breakout: (mint: string) => void;
-  // a launch's curve reached the fill rule's level
-  fill: (mint: string) => void;
-  // a curve completed, tracked or not
-  complete: (mint: string) => void;
-  // another copied wallet bought the launch, from the rule's minimum up to its strong count
-  copy: (mint: string, wallets: string[]) => void;
+  // every trade on a tracked curve, for a strategy that wants the raw flow
+  trade: (trade: LaunchTrade) => void;
   // every trade on a tracked curve: its price and virtual SOL depth after the trade
   price: (mint: string, priceSol: number, virtualSol: number) => void;
+  // a curve completed, tracked or not
+  complete: (mint: string) => void;
 }
 
 export declare interface LaunchTracker {
@@ -105,37 +82,13 @@ const pct = (part: bigint, whole: bigint) => (whole > 0n ? (Number(part) / Numbe
 
 /**
  * Follows every new pump.fun coin's trades from the log stream the detector
- * already receives, so it knows who bought in the launch slot and what they
- * still hold at no RPC cost. The RPC-based bundle check asked for a coin's
- * newest 20 signatures, which 90s after launch are ordinary trades, and could
- * not parse version-1 transactions, so it almost always saw nobody.
- *
- * With a breakout rule it also says when a launch first doubles (or whatever
- * the rule asks) on real buying, which is when the breakout entry mode buys.
+ * already receives: who bought in the launch slot and what they still hold,
+ * what the dev did, and the curve's reserves after each trade. No RPC cost.
+ * It only observes; deciding what to do with it is the strategy's job.
  */
 export class LaunchTracker extends EventEmitter {
   private readonly launches = new Map<string, Launch>();
   private lastSweep = 0;
-  private breakoutRule: BreakoutRule | null = null;
-  private fillPct: number | null = null;
-  private copyRule: CopyRule | null = null;
-
-  setBreakoutRule(rule: BreakoutRule | null): void {
-    this.breakoutRule = rule;
-  }
-
-  /**
-   * Say "copy" each time another of `wallets` buys a launch after its create
-   * slot, from the `minWallets`th up to the `strongWallets`th; null leaves it off.
-   */
-  setCopyRule(rule: CopyRule | null): void {
-    this.copyRule = rule;
-  }
-
-  /** Say "fill" when a launch's curve is first `pct`% sold; null leaves it off. */
-  setFillRule(pct: number | null): void {
-    this.fillPct = pct;
-  }
 
   ingest(logs: readonly string[], slot: number, now = Date.now()): void {
     const created = decodePumpCreateEvent(logs);
@@ -150,10 +103,6 @@ export class LaunchTracker extends EventEmitter {
         devBought: 0n,
         devHeld: 0n,
         launchBuyers: new Map(),
-        brokeOut: false,
-        filled: false,
-        copyBuyers: new Set(),
-        copied: false,
         curve: {
           virtualSolLamports: created.virtualSolReserves,
           virtualTokenRaw: created.virtualTokenReserves,
@@ -179,9 +128,7 @@ export class LaunchTracker extends EventEmitter {
         l.curve = { virtualSolLamports: t.virtualSolReserves, virtualTokenRaw: t.virtualTokenReserves, at: now, complete: false };
         const virtualSol = Number(t.virtualSolReserves) / 1e9;
         const priceSol = virtualSol / (Number(t.virtualTokenReserves) / 1e6);
-        this.checkBreakout(t.mint, l, priceSol, slot, now);
-        this.checkFill(t.mint, l, slot, now);
-        if (t.isBuy) this.checkCopy(t.mint, l, t.user, slot, now);
+        if (l.tradable) this.emit("trade", { ...t, slot, at: now, priceSol });
         this.emit("price", t.mint, priceSol, virtualSol);
       }
     }
@@ -194,62 +141,27 @@ export class LaunchTracker extends EventEmitter {
     if (now - this.lastSweep > 60_000) this.sweep(now);
   }
 
-  stats(mint: string): LaunchStats | null {
+  stats(mint: string, now = Date.now()): LaunchStats | null {
     const l = this.launches.get(mint);
     if (!l) return null;
     let held = 0n;
     for (const tokens of l.launchBuyers.values()) if (tokens > 0n) held += tokens;
     const devSold = l.devBought - (l.devHeld > 0n ? l.devHeld : 0n);
     return {
+      ageMs: now - l.seenAt,
+      startPriceSol: l.startPriceSol,
       launchBuyers: l.launchBuyers.size,
       launchBuyersHeldPct: pct(held, TOTAL_SUPPLY_RAW),
       devBoughtPct: pct(l.devBought, TOTAL_SUPPLY_RAW),
       devSoldPct: pct(devSold > 0n ? devSold : 0n, l.devBought),
       buySol: Number(l.buyLamports) / 1e9,
+      curveFillPct: curveFillPct(l.curve.virtualTokenRaw),
     };
   }
 
   /** The curve's reserves after the last trade seen on it, or null when this run never saw the launch. */
   curveState(mint: string): CurveState | null {
     return this.launches.get(mint)?.curve ?? null;
-  }
-
-  private checkBreakout(mint: string, l: Launch, priceSol: number, slot: number, now: number): void {
-    const rule = this.breakoutRule;
-    if (!rule || l.brokeOut || !l.tradable) return;
-    // the create's own slot is the dev's and the bundle's, not a buyable move
-    if (slot <= l.slot) return;
-    const age = now - l.seenAt;
-    if (age < rule.minAgeSec * 1000 || age > BREAKOUT_WINDOW_MS) return;
-    if (priceSol < rule.multiple * l.startPriceSol) return;
-    const s = this.stats(mint)!;
-    if (s.buySol < rule.minBuySol) return;
-    if (s.devBoughtPct > 0 && s.devSoldPct >= rule.maxDevSoldPct) return;
-    l.brokeOut = true;
-    this.emit("breakout", mint);
-  }
-
-  private checkFill(mint: string, l: Launch, slot: number, now: number): void {
-    const pct = this.fillPct;
-    if (pct === null || l.filled || !l.tradable || slot <= l.slot) return;
-    const age = now - l.seenAt;
-    if (age < FILL_MIN_AGE_MS || age > FILL_WINDOW_MS) return;
-    const fill = curveFillPct(l.curve.virtualTokenRaw);
-    // a sold-out curve cannot be bought any more
-    if (fill < pct || fill >= 100) return;
-    l.filled = true;
-    this.emit("fill", mint);
-  }
-
-  private checkCopy(mint: string, l: Launch, user: string, slot: number, now: number): void {
-    const rule = this.copyRule;
-    if (!rule || l.copied || !l.tradable || slot <= l.slot || !rule.wallets.has(user)) return;
-    if (now - l.seenAt > COPY_WINDOW_MS || l.curve.complete) return;
-    if (l.copyBuyers.has(user)) return;
-    l.copyBuyers.add(user);
-    if (l.copyBuyers.size < rule.minWallets) return;
-    if (l.copyBuyers.size >= (rule.strongWallets ?? rule.minWallets)) l.copied = true;
-    this.emit("copy", mint, [...l.copyBuyers]);
   }
 
   private sweep(now: number): void {

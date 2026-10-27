@@ -46,7 +46,7 @@ export function summarize(trades: ClosedTrade[], fromTs: number, toTs: number): 
     realized += t.realizedPnlUsd;
     deployed += t.entrySizeUsd;
     if (t.closeReason === "rug-pull") rugs++;
-    // Same rule as PositionStore and the drawdown circuit: break-even is not a win.
+    // Same rule as PositionStore: break-even is not a win.
     if (t.realizedPnlUsd > 0) {
       wins++;
       grossWin += t.realizedPnlUsd;

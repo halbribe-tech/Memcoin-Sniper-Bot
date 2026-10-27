@@ -1,6 +1,6 @@
 /**
  * `pnpm alerts:test` — prove the Telegram settings work before trusting them
- * with a halt alert.
+ * with real alerts.
  *
  *   • token missing → how to get one
  *   • token set, chat id missing → lists the chats that have messaged the bot,

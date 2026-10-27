@@ -12,7 +12,6 @@ import {
   RotateCcw,
   ShieldCheck,
   ShieldOff,
-  SlidersHorizontal,
   Square,
   X,
   Zap,
@@ -24,9 +23,6 @@ const NAV = [
   { href: "/positions", label: "Positions" },
   { href: "/history", label: "History" },
   { href: "/stats", label: "Stats" },
-  { href: "/analytics", label: "Analytics" },
-  { href: "/filters", label: "Filters" },
-  { href: "/backtest", label: "Backtest" },
 ];
 
 // Every pill keeps to one line and its own width; what does not fit at a
@@ -37,7 +33,7 @@ const PILL = "flex shrink-0 items-center whitespace-nowrap rounded-md border px-
  * One row at every width. What is always there: the bot switch and the
  * PAPER/LIVE badge — the two things that must never be out of reach or out of
  * sight. Below lg the page links move into a menu, and the lower-priority
- * pills appear as the screen widens: RPC (sm), preset (xl), pools and uptime
+ * pills appear as the screen widens: RPC (sm), pools and uptime
  * (2xl). The menu carries all of it at any width.
  */
 export function Header() {
@@ -111,15 +107,6 @@ export function Header() {
             )}
             <ModeBadge isPaper={isPaper} />
             <Connection connected={connected} />
-            {status?.activePreset && (
-              <div
-                className={`${PILL} hidden max-w-[10rem] gap-1.5 border-accent-blue/30 bg-accent-blue/5 font-medium text-accent-blue xl:flex`}
-                title={`Active filter preset: ${status.activePreset}`}
-              >
-                <SlidersHorizontal className="h-3 w-3 shrink-0" />
-                <span className="truncate">{status.activePreset}</span>
-              </div>
-            )}
             {status && (
               <div className={`${PILL} hidden gap-3 border-border bg-bg-card text-fg-muted 2xl:flex`}>
                 <span className="flex items-center gap-1">
@@ -151,12 +138,6 @@ export function Header() {
               ))}
             </nav>
             <MenuStatus status={status} connected={connected} />
-          </div>
-        )}
-
-        {status?.syntheticFeed && (
-          <div className="border-t border-accent-amber/20 bg-accent-amber/5 px-1 py-1.5 text-center text-[11px] font-medium text-accent-amber">
-            SYNTHETIC FEED ACTIVE — these are fake pools for pipeline testing
           </div>
         )}
       </div>
@@ -198,7 +179,6 @@ function NavLink({
 function MenuStatus({ status, connected }: { status: SystemStatus | null; connected: boolean }) {
   const rows: [string, ReactNode][] = [
     ["Engine", connected ? "connected" : "disconnected"],
-    ["Preset", status?.activePreset ?? "env defaults"],
     ["Pools seen", status ? status.detectedTotal : "—"],
     ["Uptime", status ? formatUptime(status.uptime) : "—"],
     ["RPC requests", status ? status.rpcRequests : "—"],
@@ -235,8 +215,8 @@ function Connection({ connected }: { connected: boolean }) {
 
 /**
  * The whole bot: the engine boots off, with no RPC subscription, so nothing is
- * detected, filtered or traded — and no credit is spent — until this is pressed.
- * Off again stops all of that; open positions keep their exits.
+ * detected, judged or traded — and no credit is spent — until this is pressed.
+ * Off again stops all of that; open positions stay priced and the strategy can still sell.
  */
 function BotToggle({
   on,
@@ -274,9 +254,9 @@ function BotToggle({
           ? "Engine not connected"
           : on
             ? feedLive
-              ? "Stop: unsubscribe from the RPC provider and open no new positions (open ones keep their exits)"
+              ? "Stop: unsubscribe from the RPC provider and open no new positions (open ones stay managed)"
               : "On, but no feed is delivering pools — check the RPC settings"
-            : "Start: subscribe to new pools (spends RPC credits), filter them and paper-trade the snipes"
+            : "Start: subscribe to new pools (spends RPC credits) and paper-trade what the strategy buys"
       }
       className={`${PILL} gap-1.5 font-semibold tracking-wide transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
         !on
@@ -300,7 +280,7 @@ function BotToggle({
 }
 
 /**
- * Back to the starting bankroll: deletes every pool, verdict, position and
+ * Back to the starting bankroll: deletes every pool, decision, position and
  * trade. Only with the bot off, so no buy lands while it wipes.
  */
 function ResetStats({ botOn, available }: { botOn: boolean; available: boolean }) {
@@ -309,7 +289,7 @@ function ResetStats({ botOn, available }: { botOn: boolean; available: boolean }
   const reset = () => {
     if (
       !window.confirm(
-        "Reset all stats? Every pool, verdict, position and trade is deleted and the bankroll goes back to its starting balance. Filter presets are kept.",
+        "Reset all stats? Every pool, decision, position and trade is deleted and the bankroll goes back to its starting balance.",
       )
     )
       return;

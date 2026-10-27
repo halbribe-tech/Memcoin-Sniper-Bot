@@ -91,7 +91,7 @@ export class PoolDetector extends EventEmitter {
   /**
    * A pump.fun launch is read from its CreateEvent in the logs: no fetch, so
    * it costs no RPC credit and reads every transaction version. Mayhem and
-   * non-SOL coins are dropped here, before any filter spends a request.
+   * non-SOL coins are dropped here, before the strategy sees them.
    */
   private processPumpFunLog(raw: RawLogEvent): void {
     const created = decodePumpCreateEvent(raw.logs);

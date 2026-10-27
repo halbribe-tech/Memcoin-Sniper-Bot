@@ -15,7 +15,6 @@ import {
 
 export function BankrollBar() {
   const bankroll = useFeedStore((s) => s.bankroll);
-  const status = useFeedStore((s) => s.status);
   const openCount = useFeedStore((s) => s.openPositions.size);
 
   if (!bankroll) {
@@ -176,13 +175,6 @@ export function BankrollBar() {
           </div>
         ))}
       </div>
-
-      {status?.syntheticFeed && (
-        <div className="rounded-md border border-accent-amber/20 bg-accent-amber/5 px-3 py-1.5 text-[11px] text-accent-amber">
-          Paper P&amp;L is being driven by the synthetic price simulator (30× time scale). Bucket
-          quality from the synthetic feed shapes each trajectory.
-        </div>
-      )}
     </div>
   );
 }

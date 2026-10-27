@@ -1,32 +1,28 @@
-import { BUILT_IN_PRESETS, type PoolEvent } from "@sniperbot/shared";
+import type { PoolEvent } from "@sniperbot/shared";
 import { env, isPaperMode } from "./config/env.js";
 import { logger } from "./utils/logger.js";
 import { closeRedis, pingRedis } from "./state/redis.js";
 import { disconnectPrisma, getPrisma } from "./state/db.js";
 import { HeliusLogStream } from "./feeds/helius-ws.js";
 import { PoolDetector } from "./feeds/pool-detector.js";
-import { SyntheticFeed } from "./feeds/synthetic-feed.js";
 import { SocketServer } from "./api/socket-server.js";
-import { FilterOrchestrator } from "./filters/orchestrator.js";
-import { publishVerdict } from "./state/verdict-stream.js";
 import { PositionStore } from "./state/position-store.js";
 import { PnlTracker } from "./analytics/pnl-tracker.js";
-import { Trader } from "./execution/trader.js";
+import { PaperBroker } from "./execution/broker.js";
 import { BotSwitch } from "./execution/bot-switch.js";
 import { MarketFeed } from "./execution/market-price.js";
-import { isSyntheticPool } from "./execution/price-simulator.js";
 import { restorePositions } from "./state/position-restore.js";
 import { limitRpcRate, rpcUsage } from "./utils/rpc-meter.js";
-import { ExitEngine } from "./exits/exit-engine.js";
-import { RugWatcher } from "./exits/rug-watcher.js";
-import { DrawdownCircuit } from "./risk/drawdown-circuit.js";
-import { bootstrapPresets } from "./state/filter-presets.js";
 import { wipeStoredStats } from "./state/reset-stats.js";
+import { DecisionLog } from "./state/decision-stream.js";
 import { SOL_MINT } from "./feeds/parsers/common.js";
 import { launchTracker } from "./feeds/launch-tracker.js";
-import { loadCopyWallets } from "./feeds/copy-wallets.js";
-import { resolveDelta } from "./config/filter-config.js";
+import { PositionPricer } from "./positions/pricer.js";
+import { strategy, type BuyOrder, type StrategyContext } from "./strategy/index.js";
 import { createAlerter } from "./alerts/index.js";
+
+// pump.fun launches stay known this long, so a strategy can buy one on a later trade
+const POOL_MEMORY_MS = 45 * 60_000;
 
 async function main() {
   logger.info(
@@ -34,7 +30,6 @@ async function main() {
       mode: env.MODE,
       logLevel: env.LOG_LEVEL,
       nodeEnv: env.NODE_ENV,
-      syntheticFeed: env.SYNTHETIC_FEED,
       enabledDexes: {
         pumpfun: env.ENABLE_PUMPFUN,
         pumpswap: env.ENABLE_PUMPSWAP,
@@ -49,15 +44,9 @@ async function main() {
   );
 
   if (isPaperMode) {
-    logger.info(
-      { startingBalanceUsd: env.PAPER_STARTING_BALANCE_USD },
-      "PAPER MODE — no real funds at risk",
-    );
+    logger.info({ startingBalanceUsd: env.PAPER_STARTING_BALANCE_USD }, "PAPER MODE — no real funds at risk");
   } else {
-    logger.warn(
-      { liveMaxBankrollUsd: env.LIVE_MAX_BANKROLL_USD },
-      "LIVE MODE — real funds at risk",
-    );
+    logger.warn({ liveMaxBankrollUsd: env.LIVE_MAX_BANKROLL_USD }, "LIVE MODE — real funds at risk");
   }
 
   // Before any connection exists: every RPC request from here on is paced.
@@ -79,42 +68,38 @@ async function main() {
     process.exit(1);
   }
 
-  // === Phase 4: filter presets / runtime config ===
-  await bootstrapPresets();
-
-  // === Pool detection pipeline ===
+  // === Pool detection ===
   const stream = new HeliusLogStream();
   const detector = new PoolDetector(stream);
-  // who bought each launch's first slot, and what they still hold: free, from the same stream
+  // every pump.fun launch's trades, curve and first buyers: free, from the same stream
   stream.on("pump-logs", (logs, slot) => launchTracker.ingest(logs, slot));
-  const orchestrator = new FilterOrchestrator();
 
-  // === Phase 3: paper trading ===
+  // === Paper trading ===
   const positionStore = new PositionStore();
   const pnl = new PnlTracker(positionStore);
-  const circuit = new DrawdownCircuit(positionStore, pnl);
-  // Market prices (Jupiter, free) for every open position on a real pool.
-  // Synthetic positions keep their simulated price and are not polled.
+  // Market prices (Jupiter, free) for every open position, and SOL for curve prices.
   const market = new MarketFeed(() => {
-    const mints = positionStore
-      .list()
-      .filter((p) => !positionStore.get(p.id)?.profile)
-      .map((p) => p.tokenMint);
-    // SOL prices the curve's start, which the dead-coin exit compares against
-    return mints.length > 0 ? [...mints, SOL_MINT] : mints;
+    const mints = positionStore.list().map((p) => p.tokenMint);
+    return [...mints, SOL_MINT];
   });
-  const trader = new Trader(positionStore, pnl, circuit, market);
-  const exitEngine = new ExitEngine(positionStore, env.SYNTHETIC_FEED ? 30 : 1, market);
-  const rugWatcher = new RugWatcher(positionStore, exitEngine, market);
-  // pump.fun positions exit on the curve's own trades, not on 3s price polls
+  const broker = new PaperBroker(positionStore, market);
+  const decisions = new DecisionLog();
+  const ctx: StrategyContext = {
+    now: () => Date.now(),
+    launch: (mint) => launchTracker.stats(mint),
+    curve: (mint) => launchTracker.curveState(mint),
+    solPriceUsd: () => market.get(SOL_MINT)?.priceUsd,
+    bankroll: () => pnl.buildSnapshot(),
+    openPositions: () => positionStore.list(),
+  };
+  const pricer = new PositionPricer(positionStore, market, broker, strategy, ctx);
   launchTracker.on("price", (mint, priceSol, virtualSol) => {
     if (!positionStore.list().some((p) => p.tokenMint === mint)) return;
     const solUsd = market.get(SOL_MINT)?.priceUsd;
-    if (!solUsd) return;
-    exitEngine.onCurveTrade(mint, priceSol * solUsd, virtualSol * solUsd);
+    if (solUsd) pricer.onCurveTrade(mint, priceSol * solUsd, virtualSol * solUsd);
   });
-  launchTracker.on("complete", (mint) => exitEngine.onCurveComplete(mint));
-  const alerter = createAlerter({ store: positionStore, circuit, pnl });
+  launchTracker.on("complete", (mint) => pricer.onCurveComplete(mint));
+  const alerter = createAlerter({ store: positionStore, pnl });
 
   // What the last run left open carries on; what it closed stays in the totals.
   try {
@@ -123,181 +108,103 @@ async function main() {
     logger.error({ err }, "could not restore positions from the last run — starting without them");
   }
 
-  // Filters run EVAL_DELAY_SEC after a pool appears. At launch the honeypot
-  // quote, the volume and the socials do not exist yet, so several filters
-  // could only answer "unknown" and no strict preset could ever pass.
-  // Synthetic pools carry their answers and are judged at once.
-  // Bumped by a stats reset: a pool detected before it is not judged after it.
+  // === Strategy ===
+  // Bumped by a stats reset: a pool detected before it is not acted on after it.
   let statsGeneration = 0;
-  // In breakout, curve-fill and copy mode a pump.fun launch waits here until
-  // the tracker says its moment has come.
-  const awaitingBreakout = new Map<string, { event: PoolEvent; generation: number; at: number }>();
-  const breakoutMode = env.ENTRY_MODE !== "delay";
-  if (breakoutMode) {
-    if (env.ENTRY_MODE === "copy") {
-      const wallets = loadCopyWallets(env.COPY_WALLETS_FILE);
-      const strongAt = Math.max(env.COPY_STRONG_WALLETS, env.COPY_MIN_WALLETS);
-      launchTracker.setCopyRule({ wallets: new Set(wallets.keys()), minWallets: env.COPY_MIN_WALLETS, strongWallets: strongAt });
-      const checklistPreset = BUILT_IN_PRESETS.find((p) => p.name === env.COPY_CHECKLIST_PRESET);
-      if (env.COPY_CHECKLIST_PRESET && !checklistPreset) {
-        logger.warn({ preset: env.COPY_CHECKLIST_PRESET }, "no such preset for the copy checklist — using every default filter");
-      }
-      const checklist = { ...resolveDelta(checklistPreset?.config), minFilterScore: env.COPY_CHECKLIST_MIN_SCORE };
-      // Fewer wallets buy on the checklist and stay waiting, so a later strong signal
-      // can still buy; the trader holds a coin at most once.
-      launchTracker.on("copy", (mint, buyers) => {
-        const waiting = awaitingBreakout.get(mint);
-        if (!waiting || waiting.generation !== statsGeneration) return;
-        const strong = buyers.length >= strongAt;
-        if (strong) awaitingBreakout.delete(mint);
-        logger.info(
-          { mint: mint.slice(0, 8), wallets: buyers.map((w) => wallets.get(w) || w.slice(0, 6)) },
-          strong
-            ? `${buyers.length} copied wallets in — judging on the active preset`
-            : `${buyers.length} copied wallet(s) in — judging on the checklist, min score ${env.COPY_CHECKLIST_MIN_SCORE}`,
-        );
-        trader.cachePool(waiting.event);
-        void orchestrator.evaluate(waiting.event, strong ? {} : { configOverride: checklist });
-      });
-    } else if (env.ENTRY_MODE === "breakout") {
-      launchTracker.setBreakoutRule({
-        multiple: env.BREAKOUT_MULTIPLE,
-        minAgeSec: env.BREAKOUT_MIN_AGE_SEC,
-        minBuySol: env.BREAKOUT_MIN_BUY_SOL,
-        maxDevSoldPct: env.BREAKOUT_MAX_DEV_SOLD_PCT,
-      });
-    } else {
-      launchTracker.setFillRule(env.CURVE_FILL_PCT);
-    }
-    const judgeNow = (mint: string, why: string) => {
-      const waiting = awaitingBreakout.get(mint);
-      if (!waiting) return;
-      awaitingBreakout.delete(mint);
-      if (waiting.generation !== statsGeneration) return;
-      logger.info({ mint: mint.slice(0, 8), ageSec: Math.round((Date.now() - waiting.at) / 1000) }, `${why} — judging now`);
-      trader.cachePool(waiting.event);
-      void orchestrator.evaluate(waiting.event);
-    };
-    launchTracker.on("breakout", (mint) => judgeNow(mint, "breakout"));
-    launchTracker.on("fill", (mint) => judgeNow(mint, `curve ${env.CURVE_FILL_PCT}% sold`));
-    setInterval(() => {
-      // the tracker's breakout window is 15 minutes, its fill window 25, its copy window 30
-      const cutoff = Date.now() - 31 * 60_000;
-      for (const [mint, w] of awaitingBreakout) if (w.at < cutoff) awaitingBreakout.delete(mint);
-    }, 60_000).unref();
-  }
+  // recent pump.fun launches, so a buy decided on a later trade has its pool
+  const recentPools = new Map<string, { pool: PoolEvent; generation: number }>();
 
-  detector.on("pool", (event) => {
-    const generation = statsGeneration;
-    if (breakoutMode && event.source === "pumpfun" && !isSyntheticPool(event)) {
-      awaitingBreakout.set(event.tokenMint, { event, generation, at: event.detectedAt });
+  const act = (pool: PoolEvent, order: BuyOrder | null, generation: number, from: string) => {
+    if (generation !== statsGeneration) return;
+    const base = { poolAddress: pool.poolAddress, tokenMint: pool.tokenMint, signature: pool.signature, source: pool.source };
+    if (!order) {
+      // a pool skipped on detection is logged once; a trade that does not buy is not
+      if (from === "pool") decisions.record({ ...base, decision: "skip", reason: "no buy", decidedAt: Date.now() });
       return;
     }
-    const judge = () => {
-      if (generation !== statsGeneration) return;
-      trader.cachePool(event);
-      void orchestrator.evaluate(event);
-    };
-    const delayMs = isSyntheticPool(event) ? 0 : env.EVAL_DELAY_SEC * 1000;
-    if (delayMs === 0) judge();
-    else setTimeout(judge, delayMs).unref();
-  });
+    if (broker.holds(pool.tokenMint)) return;
+    decisions.record({ ...base, decision: "buy", reason: order.reason, decidedAt: Date.now() });
+    logger.info({ mint: pool.tokenMint.slice(0, 8), sizeUsd: order.sizeUsd, reason: order.reason, from }, "strategy buys");
+    void broker.buy(pool, order.sizeUsd);
+  };
 
-  orchestrator.on("verdict", (v) => {
-    void publishVerdict(v);
-    // every verdict takes its pool out of the cache, so rejects cannot pile up
-    const pool = trader.resolvePool(v);
-    if (v.decision === "snipe") {
-      if (pool) void trader.handleVerdict(v, pool);
-      else logger.warn({ poolAddress: v.poolAddress }, "snipe verdict missing pool cache");
-    }
-  });
-
-  // Built here, started only by the switch below.
-  let synthetic: SyntheticFeed | null = null;
-  if (env.SYNTHETIC_FEED) {
-    synthetic = new SyntheticFeed(detector, env.SYNTHETIC_FEED_MIN_MS, env.SYNTHETIC_FEED_MAX_MS);
-  } else {
-    const urlNeedsKey = env.HELIUS_RPC_URL.endsWith("=");
-    if (urlNeedsKey && !env.HELIUS_API_KEY) {
-      logger.warn(
-        "RPC URL needs an api-key suffix but HELIUS_API_KEY is empty — pool detection will produce no events.",
+  detector.on("pool", (pool) => {
+    const generation = statsGeneration;
+    if (pool.source === "pumpfun") recentPools.set(pool.tokenMint, { pool, generation });
+    Promise.resolve()
+      .then(() => strategy.onPool(pool, ctx))
+      .then(
+        (order) => act(pool, order, generation, "pool"),
+        (err) => logger.error({ err, mint: pool.tokenMint.slice(0, 8) }, "strategy.onPool threw — skipping"),
       );
+  });
+
+  launchTracker.on("trade", (trade) => {
+    const known = recentPools.get(trade.mint);
+    if (!known || !broker.isEnabled()) return;
+    let order: BuyOrder | null = null;
+    try {
+      order = strategy.onTrade(trade, known.pool, ctx);
+    } catch (err) {
+      logger.error({ err, mint: trade.mint.slice(0, 8) }, "strategy.onTrade threw — skipping");
     }
+    if (order) act(known.pool, order, known.generation, "trade");
+  });
+
+  setInterval(() => {
+    const cutoff = Date.now() - POOL_MEMORY_MS;
+    for (const [mint, k] of recentPools) if (k.pool.detectedAt < cutoff) recentPools.delete(mint);
+  }, 60_000).unref();
+
+  const urlNeedsKey = env.HELIUS_RPC_URL.endsWith("=");
+  if (urlNeedsKey && !env.HELIUS_API_KEY) {
+    logger.warn("RPC URL needs an api-key suffix but HELIUS_API_KEY is empty — pool detection will produce no events.");
   }
 
-  // Before circuit.start(): the alerter must hear a close before the halt it triggers.
   alerter?.start();
-  circuit.start();
   market.start();
-  exitEngine.start();
-  rugWatcher.start();
+  pricer.start();
   pnl.start(60_000);
 
   // Nothing subscribes to the RPC provider until the dashboard turns this on.
   const bot = new BotSwitch({
     feed: {
-      start: async () => {
-        await stream.start();
-        synthetic?.start();
-      },
-      stop: async () => {
-        synthetic?.stop();
-        await stream.stop();
-      },
-      isLive: () => stream.isReady() || (synthetic?.isRunning() ?? false),
+      start: () => stream.start(),
+      stop: () => stream.stop(),
+      isLive: () => stream.isReady(),
     },
     detector,
-    orchestrator,
-    trader,
+    broker,
   });
 
   // Back to a fresh bankroll: only with the bot off, so no buy lands mid-wipe.
   const resetStats = async () => {
     if (bot.isOn()) throw new Error("turn the bot off first");
-    if (trader.isEntering()) throw new Error("a buy is still being priced — try again in a few seconds");
+    if (broker.isBuying()) throw new Error("a buy is still being priced — try again in a few seconds");
     await wipeStoredStats();
     statsGeneration++;
-    awaitingBreakout.clear();
+    recentPools.clear();
     positionStore.reset();
     pnl.reset();
-    circuit.reset();
-    trader.resetStats();
-    exitEngine.resetStats();
-    rugWatcher.resetStats();
+    broker.resetStats();
+    decisions.resetStats();
     detector.resetStats();
-    orchestrator.resetStats();
     logger.warn({ startingBalanceUsd: env.PAPER_STARTING_BALANCE_USD }, "stats reset from dashboard");
   };
 
-  const socketServer = new SocketServer(detector, orchestrator, positionStore, pnl, circuit, bot, resetStats);
+  const socketServer = new SocketServer(detector, decisions, positionStore, pnl, bot, resetStats);
   await socketServer.start();
 
-  logger.info(
-    {
-      botOn: bot.isOn(),
-      syntheticConfigured: !!synthetic,
-      socketPort: env.ENGINE_HTTP_PORT,
-      filterCount: orchestrator.getStats().filters,
-      tpLadder: env.TP_LADDER,
-      stopLossPct: env.STOP_LOSS_PCT,
-      maxConcurrent: env.MAX_CONCURRENT_POSITIONS,
-      positionSizePct: env.POSITION_SIZE_PCT,
-    },
-    "Phase 3 pipeline live (paper trading)",
-  );
+  logger.info({ botOn: bot.isOn(), socketPort: env.ENGINE_HTTP_PORT }, "engine live (paper trading, no strategy logic yet)");
   logger.warn(
     "Bot is OFF — not connected to the RPC provider (no credits spent), no pools, no trades. Press Bot OFF → ON on the dashboard.",
   );
 
   const statsTimer = setInterval(() => {
     const ds = detector.getStats();
-    const os = orchestrator.getStats();
+    const dec = decisions.getStats();
     const ps = positionStore.getStats();
-    const ts = trader.getStats();
-    const es = exitEngine.getStats();
-    const rs = rugWatcher.getStats();
-    const cs = circuit.getStats();
+    const bs = broker.getStats();
     const snap = pnl.buildSnapshot();
     const as = alerter?.getStats();
     logger.info(
@@ -305,27 +212,16 @@ async function main() {
         pools: ds.parsed,
         droppedMayhem: ds.skippedMayhem,
         droppedNotSolPaired: ds.skippedNotSolPaired,
-        snipes: os.snipes,
-        rejects: os.rejects,
+        buys: dec.buys,
+        skips: dec.skips,
         open: ps.open,
         closed: ps.totalClosed,
         winRate: `${ps.winRatePct.toFixed(1)}%`,
         balance: `$${snap.balanceUsd.toFixed(0)}`,
         realized: `$${ps.realizedPnlUsd.toFixed(2)}`,
         unrealized: `$${ps.unrealizedPnlUsd.toFixed(2)}`,
-        skipped: ts.skippedFull + ts.skippedRate + ts.skippedExposure,
-        failedFills: ts.failedFills,
-        skippedFaded: ts.skippedFaded,
-        partials: es.partialFills,
-        fullCloses: es.fullCloses,
-        rugs: es.rugBroadcasts,
-        rugWatch: rs.tracked,
-        rugDetected: rs.detections,
-        halted: cs.halted,
-        haltReason: cs.haltReason,
-        dailyLossUsd: cs.dailyLossUsd.toFixed(2),
-        consLosses: cs.consecutiveLosses,
-        skippedHalted: ts.skippedHalted,
+        failedFills: bs.failedFills,
+        noPrice: bs.noPrice,
         bot: bot.isOn() ? "on" : "off",
         rpcRequests: rpcUsage().rpcRequests,
         alerts: as ? (as.disabled ? "disabled" : `${as.sent} sent, ${as.failed} failed, ${as.dropped} dropped`) : undefined,
@@ -343,11 +239,8 @@ async function main() {
       }, 15_000).unref();
       clearInterval(statsTimer);
       await alerter?.stop(signal);
-      synthetic?.stop();
-      rugWatcher.stop();
-      exitEngine.stop();
+      pricer.stop();
       market.stop();
-      circuit.stop();
       pnl.stop();
       await socketServer.stop();
       await stream.stop();

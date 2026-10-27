@@ -5,18 +5,6 @@ const boolFromString = z
   .union([z.boolean(), z.string()])
   .transform((v) => (typeof v === "boolean" ? v : v.toLowerCase() === "true"));
 
-const tpLadderSchema = z
-  .string()
-  .regex(/^(\d+(\.\d+)?:\d+(\.\d+)?)(,\d+(\.\d+)?:\d+(\.\d+)?)*$/, {
-    message: "TP_LADDER must be like '50:25,100:25,300:25,900:15' (gain%:sellPct)",
-  })
-  .transform((s) =>
-    s.split(",").map((entry) => {
-      const [gain, sell] = entry.split(":");
-      return { gainPct: Number(gain), sellPct: Number(sell) };
-    }),
-  );
-
 const envSchema = z.object({
   // Mode
   MODE: z.enum(["paper", "live"]).default("paper"),
@@ -32,32 +20,8 @@ const envSchema = z.object({
   RPC_MAX_RPS: z.coerce.number().int().positive().default(8),
   // quote-api.jup.ag/v6 no longer answers; lite-api is the keyless successor
   JUPITER_QUOTE_API: z.string().url().default("https://lite-api.jup.ag/swap/v1"),
-  // prices for paper trades: entries, exits and the rug watch
+  // prices for paper trades: entries and open positions
   JUPITER_PRICE_API: z.string().url().default("https://lite-api.jup.ag/price/v3"),
-  // seconds between a pool appearing and its filters running; 0 = at once
-  EVAL_DELAY_SEC: z.coerce.number().int().min(0).default(90),
-  // "delay": judge every pump.fun launch EVAL_DELAY_SEC after it appears.
-  // "breakout": judge a launch the moment its curve first reaches
-  // BREAKOUT_MULTIPLE × its start price on real buying; other DEXes keep the delay.
-  // "curve-fill": judge a launch the moment its curve is first CURVE_FILL_PCT% sold.
-  // "copy": judge it once COPY_MIN_WALLETS of the wallets in COPY_WALLETS_FILE have bought it.
-  ENTRY_MODE: z.enum(["delay", "breakout", "curve-fill", "copy"]).default("delay"),
-  BREAKOUT_MULTIPLE: z.coerce.number().min(1).default(2),
-  BREAKOUT_MIN_AGE_SEC: z.coerce.number().min(0).default(5),
-  BREAKOUT_MIN_BUY_SOL: z.coerce.number().min(0).default(22),
-  BREAKOUT_MAX_DEV_SOLD_PCT: z.coerce.number().min(0).max(100).default(100),
-  CURVE_FILL_PCT: z.coerce.number().min(1).max(99).default(90),
-  // JSON list of {address, name}, relative to the repo root
-  COPY_WALLETS_FILE: z.string().default("research/wallets/tracked.json"),
-  // from COPY_MIN_WALLETS copied wallets a coin is judged on the checklist (the preset named
-  // COPY_CHECKLIST_PRESET, or every default filter when empty) and needs COPY_CHECKLIST_MIN_SCORE;
-  // from COPY_STRONG_WALLETS it is bought on the active preset alone
-  COPY_MIN_WALLETS: z.coerce.number().int().min(1).default(3),
-  COPY_STRONG_WALLETS: z.coerce.number().int().min(1).default(3),
-  COPY_CHECKLIST_PRESET: z.string().default(""),
-  COPY_CHECKLIST_MIN_SCORE: z.coerce.number().min(0).max(100).default(70),
-  // sell the whole position once its curve completes, at the first market price after
-  EXIT_ON_MIGRATION: boolFromString.default(false),
   RUGCHECK_API_BASE: z.string().url().default("https://api.rugcheck.xyz/v1"),
 
   // Data APIs
@@ -75,52 +39,6 @@ const envSchema = z.object({
   PAPER_STARTING_BALANCE_USD: z.coerce.number().positive(),
   LIVE_MAX_BANKROLL_USD: z.coerce.number().positive(),
 
-  // Position sizing
-  POSITION_SIZE_PCT: z.coerce.number().positive(),
-  MAX_CONCURRENT_POSITIONS: z.coerce.number().int().positive(),
-  MAX_TOTAL_EXPOSURE_PCT: z.coerce.number().positive().max(100),
-  MAX_POSITION_PER_MIN: z.coerce.number().int().positive(),
-
-  // Exits
-  TP_LADDER: tpLadderSchema,
-  STOP_LOSS_PCT: z.coerce.number().negative(),
-  TRAILING_STOP_PCT: z.coerce.number().positive(),
-  TRAILING_STOP_ACTIVATION_PCT: z.coerce.number().positive(),
-  // after TP1 the stop moves to the entry price
-  BREAKEVEN_AFTER_TP1: boolFromString.default(true),
-  // sell whatever is left this many minutes after the buy, win or lose; 0 = off
-  HARD_EXIT_MIN: z.coerce.number().min(0).default(0),
-  // a pump.fun position back at its curve's start price this long is sold; 0 = off
-  DEAD_COIN_EXIT_MIN: z.coerce.number().min(0).default(3),
-  DEAD_COIN_MAX_GAIN_PCT: z.coerce.number().min(0).default(2),
-  TIME_EXIT_MIN: z.coerce.number().positive(),
-  RUG_DETECTION_LP_DROP_PCT: z.coerce.number().positive().max(100),
-
-  // Risk
-  DAILY_DRAWDOWN_LIMIT_PCT: z.coerce.number().positive().max(100),
-  WEEKLY_DRAWDOWN_LIMIT_PCT: z.coerce.number().positive().max(100),
-  HALT_ON_CONSECUTIVE_LOSSES: z.coerce.number().int().positive(),
-
-  // Filters
-  FILTER_LIQUIDITY_MIN_USD: z.coerce.number().nonnegative(),
-  FILTER_LIQUIDITY_MAX_USD: z.coerce.number().positive(),
-  FILTER_LP_LOCKED_REQUIRED: boolFromString,
-  FILTER_MINT_AUTH_RENOUNCED: boolFromString,
-  FILTER_FREEZE_AUTH_RENOUNCED: boolFromString,
-  FILTER_TOP_HOLDER_MAX_PCT: z.coerce.number().positive().max(100),
-  FILTER_TOP_10_HOLDERS_MAX_PCT: z.coerce.number().positive().max(100),
-  FILTER_DEV_RUG_RATE_MAX: z.coerce.number().min(0).max(1),
-  FILTER_HONEYPOT_SIM_REQUIRED: boolFromString,
-  FILTER_MAX_SELL_TAX_PCT: z.coerce.number().min(0).max(100),
-  FILTER_BUNDLED_LAUNCH_REJECT: boolFromString,
-  // % of supply the launch-slot buyers (dev excluded) may still hold
-  FILTER_BUNDLE_MAX_SUPPLY_PCT: z.coerce.number().min(0).max(100).default(15),
-  // % of their own buy the dev may already have sold
-  FILTER_DEV_MAX_SOLD_PCT: z.coerce.number().min(0).max(100).default(50),
-  // % a pump.fun price must sit over its launch price (after the dev's buy)
-  FILTER_CURVE_GAIN_MIN_PCT: z.coerce.number().min(0).default(20),
-  FILTER_MIN_FILTER_SCORE: z.coerce.number().min(0).max(100),
-
   // Execution
   JITO_TIP_LAMPORTS: z.coerce.number().int().nonnegative(),
   JITO_TIP_DYNAMIC: boolFromString,
@@ -129,7 +47,7 @@ const envSchema = z.object({
 
   // DEX sources
   ENABLE_PUMPFUN: boolFromString,
-  // pump.fun launches dropped before any filter or RPC call
+  // pump.fun launches the detector drops before the strategy sees them
   PUMPFUN_SKIP_MAYHEM: boolFromString.default(true),
   PUMPFUN_SOL_PAIRS_ONLY: boolFromString.default(true),
   ENABLE_PUMPSWAP: boolFromString,
@@ -149,7 +67,6 @@ const envSchema = z.object({
   ALERT_ON_NEW_POSITION: boolFromString.default(true),
   ALERT_ON_EXIT: boolFromString.default(true),
   ALERT_ON_DAILY_PNL: boolFromString.default(true),
-  ALERT_ON_DRAWDOWN_HALT: boolFromString.default(true),
   ALERT_ON_ENGINE_STATUS: boolFromString.default(true),
   ALERT_DAILY_PNL_HOUR_UTC: z.coerce.number().int().min(0).max(23).default(0),
 
@@ -158,11 +75,6 @@ const envSchema = z.object({
   NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
   ENGINE_HTTP_PORT: z.coerce.number().int().positive().default(4000),
   DASHBOARD_PORT: z.coerce.number().int().positive().default(3000),
-
-  // Synthetic feed (for testing pipeline without a Helius key)
-  SYNTHETIC_FEED: boolFromString.default(false),
-  SYNTHETIC_FEED_MIN_MS: z.coerce.number().int().positive().default(2000),
-  SYNTHETIC_FEED_MAX_MS: z.coerce.number().int().positive().default(5000),
 });
 
 export type Env = z.infer<typeof envSchema>;

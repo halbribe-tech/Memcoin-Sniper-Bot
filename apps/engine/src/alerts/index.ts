@@ -3,7 +3,6 @@ import { childLogger } from "../utils/logger.js";
 import { getPrisma } from "../state/db.js";
 import type { PositionStore } from "../state/position-store.js";
 import type { PnlTracker } from "../analytics/pnl-tracker.js";
-import type { DrawdownCircuit } from "../risk/drawdown-circuit.js";
 import { Alerter } from "./alerter.js";
 import type { ClosedTrade } from "./daily-summary.js";
 import { AlertQueue } from "./queue.js";
@@ -17,7 +16,6 @@ const log = childLogger("alerts");
  */
 export function createAlerter(deps: {
   store: PositionStore;
-  circuit: DrawdownCircuit;
   pnl: PnlTracker;
 }): Alerter | null {
   const token = env.TELEGRAM_BOT_TOKEN.trim();
@@ -58,14 +56,12 @@ export function createAlerter(deps: {
     flags: {
       newPosition: env.ALERT_ON_NEW_POSITION,
       exit: env.ALERT_ON_EXIT,
-      drawdownHalt: env.ALERT_ON_DRAWDOWN_HALT,
       dailyPnl: env.ALERT_ON_DAILY_PNL,
       engineStatus: env.ALERT_ON_ENGINE_STATUS,
     },
     dailyHourUtc: env.ALERT_DAILY_PNL_HOUR_UTC,
     sink: queue,
     store: deps.store,
-    circuit: deps.circuit,
     bankroll: () => deps.pnl.buildSnapshot(),
     loadClosed: loadClosedFromDb,
     log,
@@ -92,8 +88,7 @@ async function loadClosedFromDb(fromTs: number, toTs: number): Promise<ClosedTra
     mint: r.tokenMint,
     realizedPnlUsd: r.realizedPnlUsd,
     entrySizeUsd: r.entrySizeUsd,
-    // Prisma stores "stop_loss"; everything else in the engine says "stop-loss".
-    closeReason: r.closeReason ? r.closeReason.replace(/_/g, "-") : null,
+    closeReason: r.closeReason,
     closedAt: r.closedAt?.getTime() ?? toTs,
   }));
 }

@@ -6,14 +6,13 @@ const log = childLogger("bot-switch");
 export interface SwitchParts {
   feed: { start(): Promise<void>; stop(): Promise<void>; isLive(): boolean };
   detector: { clearPending(): void };
-  orchestrator: { setLive(on: boolean): void };
-  trader: { setEnabled(on: boolean): void };
+  broker: { setEnabled(on: boolean): void };
 }
 
 /**
  * One switch for the whole bot, off at every boot. Off means no subscription
- * to the RPC provider, so no pool is parsed or filtered and no credit is spent.
- * Open positions keep running their exits either way; those need no RPC.
+ * to the RPC provider, so no pool is parsed or judged and no credit is spent.
+ * Open positions stay priced either way; that needs no RPC.
  */
 export class BotSwitch {
   private readonly parts: SwitchParts;
@@ -43,22 +42,15 @@ export class BotSwitch {
     if (on === this.on) return;
     const p = this.parts;
     if (on) {
-      p.orchestrator.setLive(true);
-      try {
-        await p.feed.start();
-      } catch (err) {
-        p.orchestrator.setLive(false);
-        throw err;
-      }
-      p.trader.setEnabled(true);
+      await p.feed.start();
+      p.broker.setEnabled(true);
       this.on = true;
       log.warn({ feedLive: p.feed.isLive() }, "bot ON — listening for pools and trading");
       return;
     }
     // Trading stops first, then everything that spends.
     this.on = false;
-    p.trader.setEnabled(false);
-    p.orchestrator.setLive(false);
+    p.broker.setEnabled(false);
     await p.feed.stop();
     p.detector.clearPending();
     log.warn("bot OFF — no RPC subscription, no new trades");

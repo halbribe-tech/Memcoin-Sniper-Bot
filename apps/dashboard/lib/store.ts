@@ -3,7 +3,7 @@
 import { create } from "zustand";
 import type {
   BankrollSnapshot,
-  OrchestratorVerdict,
+  PoolDecision,
   PoolEvent,
   Position,
 } from "@sniperbot/shared";
@@ -12,13 +12,13 @@ import type { SystemStatus } from "./socket";
 const MAX_POOLS = 200;
 const MAX_CLOSED = 100;
 
-export interface PoolWithVerdict {
+export interface PoolWithDecision {
   pool: PoolEvent;
-  verdict?: OrchestratorVerdict;
+  decision?: PoolDecision;
 }
 
 interface FeedState {
-  pools: PoolWithVerdict[];
+  pools: PoolWithDecision[];
   status: SystemStatus | null;
   connected: boolean;
   expandedSig: string | null;
@@ -28,11 +28,11 @@ interface FeedState {
   bankroll: BankrollSnapshot | null;
 
   addPool: (event: PoolEvent) => void;
-  addVerdict: (verdict: OrchestratorVerdict) => void;
+  addDecision: (decision: PoolDecision) => void;
   setStatus: (status: SystemStatus) => void;
   setConnected: (connected: boolean) => void;
   replacePools: (pools: PoolEvent[]) => void;
-  applyVerdicts: (verdicts: OrchestratorVerdict[]) => void;
+  applyDecisions: (decisions: PoolDecision[]) => void;
   toggleExpanded: (sig: string) => void;
 
   hydratePositions: (open: Position[], closed: Position[]) => void;
@@ -63,10 +63,10 @@ export const useFeedStore = create<FeedState>((set) => ({
       return { pools: next };
     }),
 
-  addVerdict: (verdict) =>
+  addDecision: (decision) =>
     set((state) => ({
       pools: state.pools.map((p) =>
-        p.pool.signature === verdict.signature ? { ...p, verdict } : p,
+        p.pool.signature === decision.signature ? { ...p, decision } : p,
       ),
     })),
 
@@ -78,13 +78,13 @@ export const useFeedStore = create<FeedState>((set) => ({
       pools: pools.slice(0, MAX_POOLS).map((pool) => ({ pool })),
     }),
 
-  applyVerdicts: (verdicts) =>
+  applyDecisions: (decisions) =>
     set((state) => {
-      const bySig = new Map(verdicts.map((v) => [v.signature, v]));
+      const bySig = new Map(decisions.map((d) => [d.signature, d]));
       return {
         pools: state.pools.map((p) => ({
           ...p,
-          verdict: bySig.get(p.pool.signature) ?? p.verdict,
+          decision: bySig.get(p.pool.signature) ?? p.decision,
         })),
       };
     }),

@@ -27,3 +27,15 @@ export interface PoolEvent {
   token?: TokenInfo;
   rawEvent?: unknown;
 }
+
+/** What the strategy decided about a pool, for the dashboard's feed and the database. */
+export interface PoolDecision {
+  poolAddress: string;
+  tokenMint: string;
+  signature: string;
+  source: DexSource;
+  decision: "buy" | "skip";
+  /** free text from the strategy */
+  reason: string;
+  decidedAt: number;
+}

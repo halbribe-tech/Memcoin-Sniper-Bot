@@ -1,17 +1,15 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import type { HaltState } from "../risk/drawdown-circuit.js";
 import { Alerter, type AlertFlags, type AlerterDeps } from "./alerter.js";
 import { DAY_MS, type ClosedTrade } from "./daily-summary.js";
 import { FakeSink, makePosition, silentLog } from "./test-fixtures.js";
 
-const ALL_ON: AlertFlags = { newPosition: true, exit: true, drawdownHalt: true, dailyPnl: false, engineStatus: false };
+const ALL_ON: AlertFlags = { newPosition: true, exit: true, dailyPnl: false, engineStatus: false };
 const NOW = Date.UTC(2026, 8, 24, 12, 0);
 
 function setup(over: Partial<AlerterDeps> = {}) {
   const store = new EventEmitter();
-  const circuit = new EventEmitter();
   const sink = new FakeSink();
   const alerter = new Alerter({
     mode: "paper",
@@ -19,74 +17,49 @@ function setup(over: Partial<AlerterDeps> = {}) {
     dailyHourUtc: 0,
     sink,
     store,
-    circuit,
     bankroll: () => ({ balanceUsd: 10_050, openPositionCount: 2, openExposureUsd: 180 }),
     log: silentLog,
     now: () => NOW,
     ...over,
   });
-  return { store, circuit, sink, alerter };
+  return { store, sink, alerter };
 }
 
-const halt: HaltState = {
-  reason: "consecutive-losses",
-  triggeredAt: NOW,
-  untilTs: NOW + DAY_MS,
-  detail: "20 consecutive losses (limit 20)",
-};
-
 describe("Alerter", () => {
-  test("buys, exits and halts become alerts; rugs and halts are critical", () => {
-    const { store, circuit, sink, alerter } = setup();
+  test("buys and exits become alerts; rugs are critical", () => {
+    const { store, sink, alerter } = setup();
     alerter.start();
     store.emit("position-opened", { type: "position-opened", position: makePosition() });
     store.emit("position-closed", {
       type: "position-closed",
       position: makePosition({ realizedPnlUsd: -95, closeReason: "rug-pull", closedAt: NOW }),
     });
-    circuit.emit("halt-engaged", halt);
-    circuit.emit("halt-cleared");
     assert.deepEqual(
       sink.sent.map((s) => [s.text.split(" ")[0], s.priority]),
-      [["🟢", "normal"], ["🚨", "critical"], ["⛔", "critical"], ["▶️", "normal"]],
+      [["🟢", "normal"], ["🚨", "critical"]],
     );
   });
 
   test("each flag turns its alert off", () => {
-    const { store, circuit, sink, alerter } = setup({
-      flags: { newPosition: false, exit: false, drawdownHalt: false, dailyPnl: false, engineStatus: false },
+    const { store, sink, alerter } = setup({
+      flags: { newPosition: false, exit: false, dailyPnl: false, engineStatus: false },
     });
     alerter.start();
     store.emit("position-opened", { type: "position-opened", position: makePosition() });
     store.emit("position-closed", { type: "position-closed", position: makePosition({ closeReason: "tp1" }) });
-    circuit.emit("halt-engaged", halt);
     assert.equal(sink.sent.length, 0);
   });
 
-  test("started before the circuit, a close is reported before the halt it caused", () => {
-    const { store, circuit, sink, alerter } = setup();
-    alerter.start();
-    // What DrawdownCircuit.start() does: react to a close by halting, synchronously.
-    store.on("position-closed", () => circuit.emit("halt-engaged", halt));
-    store.emit("position-closed", {
-      type: "position-closed",
-      position: makePosition({ realizedPnlUsd: -40, closeReason: "stop-loss", closedAt: NOW }),
-    });
-    assert.ok(sink.sent[0]!.text.includes("Sold"));
-    assert.ok(sink.sent[1]!.text.includes("Trading halted"));
-  });
-
   test("engine status: online at start, stopping at stop, and listeners are removed", async () => {
-    const { store, circuit, sink, alerter } = setup({ flags: { ...ALL_ON, engineStatus: true } });
+    const { store, sink, alerter } = setup({ flags: { ...ALL_ON, engineStatus: true } });
     alerter.start();
     assert.match(sink.sent[0]!.text, /Engine online · bankroll \$10,050\.00/);
-    assert.match(sink.sent[0]!.text, /Alerts: buys, exits, halts, engine status/);
+    assert.match(sink.sent[0]!.text, /Alerts: buys, exits, engine status/);
     await alerter.stop("SIGTERM", 1234);
     assert.match(sink.sent[1]!.text, /Engine stopping \(SIGTERM\)\. ⚠️ 2 open positions/);
     assert.equal(sink.sent[1]!.priority, "critical");
     assert.equal(sink.flushedWith, 1234);
     assert.equal(store.listenerCount("position-opened") + store.listenerCount("position-closed"), 0);
-    assert.equal(circuit.listenerCount("halt-engaged") + circuit.listenerCount("halt-cleared"), 0);
   });
 
   test("daily report reads the database and names coins it saw in this process", async () => {

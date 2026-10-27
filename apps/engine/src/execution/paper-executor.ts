@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { PoolEvent, OrchestratorVerdict, Trade, ExitReason } from "@sniperbot/shared";
+import type { PoolEvent, Trade, ExitReason } from "@sniperbot/shared";
 import { env } from "../config/env.js";
 import { childLogger } from "../utils/logger.js";
 
@@ -47,7 +47,7 @@ function estimateSlippagePct(sizeUsd: number, liquidityUsd: number): number {
   return Math.min(25, Math.max(0.1, ratio * 100));
 }
 
-/** The market at the moment of a paper buy; absent for synthetic pools. */
+/** The market at the moment of a paper buy. */
 export interface EntryMarket {
   priceUsd: number;
   liquidityUsd: number | null;
@@ -56,7 +56,7 @@ export interface EntryMarket {
 }
 
 export interface PaperExecutor {
-  buy(verdict: OrchestratorVerdict, pool: PoolEvent, sizeUsd: number, market?: EntryMarket): PaperBuyResult;
+  buy(pool: PoolEvent, sizeUsd: number, market: EntryMarket): PaperBuyResult;
   sell(
     entryPriceUsd: number,
     currentPriceUsd: number,
@@ -67,11 +67,8 @@ export interface PaperExecutor {
 }
 
 export const paperExecutor: PaperExecutor = {
-  buy(verdict, pool, sizeUsd, market) {
-    const fillDelay = Math.floor(rand(800, 1500));
-    // With a market price the buy happens now, at that price. Without one it is
-    // a synthetic pool, bought as if right after launch at its generated price.
-    const fillTime = (market ? Date.now() : pool.detectedAt) + fillDelay;
+  buy(pool, sizeUsd, market) {
+    const fillTime = Date.now() + Math.floor(rand(800, 1500));
 
     const jitoTipSol = env.JITO_TIP_LAMPORTS / LAMPORTS_PER_SOL;
     const networkSol = NETWORK_FEE_LAMPORTS / LAMPORTS_PER_SOL;
@@ -101,14 +98,12 @@ export const paperExecutor: PaperExecutor = {
       };
     }
 
-    const liquidityUsd = market ? (market.liquidityUsd ?? 0) : pool.initialLiquidityUsd;
     // an executable quote already paid the price impact; do not charge it twice
-    const baseSlip = market?.priceIncludesImpact ? 0 : estimateSlippagePct(sizeUsd, liquidityUsd) / 100;
+    const baseSlip = market.priceIncludesImpact ? 0 : estimateSlippagePct(sizeUsd, market.liquidityUsd ?? 0) / 100;
     const sandwichHit = Math.random() < 0.30;
     const mevPenaltyPct = sandwichHit ? rand(0.005, 0.03) : 0;
 
-    const basePriceUsd = market ? market.priceUsd : pool.initialPriceUsd;
-    const effectivePriceUsd = basePriceUsd * (1 + baseSlip + mevPenaltyPct);
+    const effectivePriceUsd = market.priceUsd * (1 + baseSlip + mevPenaltyPct);
     const tokensReceived = sizeUsd / effectivePriceUsd;
 
     return {

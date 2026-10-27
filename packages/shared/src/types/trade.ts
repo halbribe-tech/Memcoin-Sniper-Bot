@@ -1,18 +1,7 @@
 export type TradeSide = "buy" | "sell";
 export type TradeStatus = "filled" | "failed" | "partial";
-export type ExitReason =
-  | "tp1"
-  | "tp2"
-  | "tp3"
-  | "tp4"
-  | "stop-loss"
-  | "trailing-stop"
-  | "time-exit"
-  | "dead-coin"
-  | "migration"
-  | "rug-pull"
-  | "kill-switch"
-  | "manual";
+/** Why a sale happened, in the strategy's own words (e.g. "take-profit", "stop-loss"). */
+export type ExitReason = string;
 
 export interface Trade {
   id: string;

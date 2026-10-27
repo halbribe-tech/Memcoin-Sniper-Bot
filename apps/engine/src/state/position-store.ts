@@ -3,28 +3,18 @@ import type {
   Position,
   Trade,
   ExitReason,
-  TPLevel,
   PositionOpenedEvent,
   PositionUpdateEvent,
   PositionClosedEvent,
 } from "@sniperbot/shared";
 import { childLogger } from "../utils/logger.js";
 import { getPrisma } from "./db.js";
-import type { PriceProfile } from "../execution/price-simulator.js";
 
 const log = childLogger("position-store");
 
 export interface PositionRecord {
   position: Position;
-  // Set only for synthetic pools, whose price is simulated. A real pool's
-  // price comes from the market feed.
-  profile?: PriceProfile;
   trades: Trade[];
-}
-
-// Map shared ExitReason ("stop-loss") → Prisma enum ("stop_loss")
-function exitReasonToPrisma(r: ExitReason): string {
-  return r.replace(/-/g, "_");
 }
 
 interface StoreEvents {
@@ -76,12 +66,12 @@ export class PositionStore extends EventEmitter {
     this.losses += t.losses;
   }
 
-  add(position: Position, profile: PriceProfile | undefined, openTrade: Trade): void {
+  add(position: Position, openTrade: Trade): void {
     if (this.open.has(position.id)) {
       log.warn({ id: position.id }, "duplicate position id; skipping");
       return;
     }
-    this.open.set(position.id, { position, profile, trades: [openTrade] });
+    this.open.set(position.id, { position, trades: [openTrade] });
     this.totalEntryCostUsd += position.entrySizeUsd;
     this.emit("position-opened", { type: "position-opened", position });
     void this.persistOpen(position, openTrade).catch((err) =>
@@ -114,10 +104,7 @@ export class PositionStore extends EventEmitter {
     return this.open.size;
   }
 
-  /**
-   * Apply price tick. Updates price, peaks, unrealized PnL, trailing arm.
-   * Returns mutated position for caller to consult exits.
-   */
+  /** Apply a price: updates price, peak and unrealized PnL, and returns the position. */
   tickPrice(id: string, currentPriceUsd: number): Position | null {
     const rec = this.open.get(id);
     if (!rec) return null;
@@ -129,10 +116,6 @@ export class PositionStore extends EventEmitter {
     }
     p.unrealizedPnlUsd = (currentPriceUsd - p.entryPriceUsd) * p.remainingTokens;
     p.unrealizedPnlPct = ((currentPriceUsd - p.entryPriceUsd) / p.entryPriceUsd) * 100;
-    if (!p.trailingStopArmed && p.peakGainPct >= p.trailingStopActivationPct) {
-      p.trailingStopArmed = true;
-      log.info({ id: id.slice(0, 8), peakPct: p.peakGainPct.toFixed(0) }, "trailing stop armed");
-    }
     return p;
   }
 
@@ -149,24 +132,14 @@ export class PositionStore extends EventEmitter {
       unrealizedPnlPct: p.unrealizedPnlPct,
       peakPriceUsd: p.peakPriceUsd,
       peakGainPct: p.peakGainPct,
-      trailingStopArmed: p.trailingStopArmed,
-      tpLadder: p.tpLadder,
       remainingTokens: p.remainingTokens,
       realizedPnlUsd: p.realizedPnlUsd,
       status: p.status,
     });
   }
 
-  /**
-   * Apply a partial sell (TP hit). Updates remainingTokens, realizedPnl, marks the matching TP level hit.
-   */
-  applyPartialSell(
-    id: string,
-    tokensSold: number,
-    proceedsUsd: number,
-    sellTrade: Trade,
-    tpIndex: number,
-  ): Position | null {
+  /** Apply a sale of part of a position: fewer tokens held, its P&L realized. */
+  applyPartialSell(id: string, tokensSold: number, proceedsUsd: number, sellTrade: Trade): Position | null {
     const rec = this.open.get(id);
     if (!rec) return null;
     const p = rec.position;
@@ -174,15 +147,10 @@ export class PositionStore extends EventEmitter {
     const costBasis = (tokensSold / p.initialTokens) * p.entrySizeUsd;
     p.remainingTokens = Math.max(0, p.remainingTokens - tokensSold);
     p.realizedPnlUsd += proceedsUsd - costBasis;
-    // A take-profit is money back in the bankroll now, not when the rest sells.
+    // a partial sale is money back in the bankroll now, not when the rest sells
     this.totalRealizedPnlUsd += proceedsUsd - costBasis;
     this.totalProceedsUsd += proceedsUsd;
     p.status = p.remainingTokens <= 1e-9 ? "closed" : "partial";
-    const tp = p.tpLadder[tpIndex];
-    if (tp) {
-      tp.hit = true;
-      tp.hitAt = Date.now();
-    }
     void this.persistTrade(p.id, sellTrade).catch((err) =>
       log.warn({ err, id }, "trade persist failed"),
     );
@@ -213,7 +181,7 @@ export class PositionStore extends EventEmitter {
     p.unrealizedPnlUsd = 0;
     p.unrealizedPnlPct = 0;
 
-    // take-profits were added as they happened; only this last sale is new
+    // partial sales were added as they happened; only this last sale is new
     this.totalRealizedPnlUsd += lastSalePnl;
     this.totalProceedsUsd += proceedsUsd;
     if (p.realizedPnlUsd > 0) this.wins++;
@@ -284,9 +252,6 @@ export class PositionStore extends EventEmitter {
         currentPriceUsd: p.currentPriceUsd,
         peakPriceUsd: p.peakPriceUsd,
         peakGainPct: p.peakGainPct,
-        filterScore: p.filterScore,
-        tpLadder: p.tpLadder as object,
-        stopLossPct: p.stopLossPct,
         status: "open",
         openedAt: new Date(p.openedAt),
         trades: {
@@ -316,11 +281,7 @@ export class PositionStore extends EventEmitter {
           unrealizedPnlUsd: 0,
           realizedPnlUsd: p.realizedPnlUsd,
           closedAt: p.closedAt ? new Date(p.closedAt) : new Date(),
-          closeReason: (p.closeReason ? exitReasonToPrisma(p.closeReason) : "manual") as
-            | "tp1" | "tp2" | "tp3" | "tp4"
-            | "stop_loss" | "trailing_stop" | "time_exit" | "dead_coin" | "migration"
-            | "rug_pull" | "kill_switch" | "manual",
-          tpLadder: p.tpLadder as object,
+          closeReason: p.closeReason ?? "manual",
         },
       }),
     ]);
@@ -338,16 +299,8 @@ function tradeToPrisma(t: Trade) {
     feeSol: t.feeSol,
     slippagePct: t.slippagePct,
     mevPenaltyPct: t.mevPenaltyPct,
-    exitReason: (t.exitReason ? exitReasonToPrisma(t.exitReason) : null) as
-      | "tp1" | "tp2" | "tp3" | "tp4"
-      | "stop_loss" | "trailing_stop" | "time_exit" | "dead_coin" | "migration"
-      | "rug_pull" | "kill_switch" | "manual"
-      | null,
+    exitReason: t.exitReason ?? null,
     signature: t.signature,
     executedAt: new Date(t.executedAt),
   };
-}
-
-export function buildTPLadder(envLadder: { gainPct: number; sellPct: number }[]): TPLevel[] {
-  return envLadder.map((l) => ({ gainPct: l.gainPct, sellPct: l.sellPct, hit: false }));
 }

@@ -2,14 +2,14 @@
 
 import { useFeedStore } from "@/lib/store";
 import { formatUptime } from "@/lib/format";
-import { Activity, Ban, Crosshair, Filter as FilterIcon, Inbox, Timer } from "lucide-react";
+import { Activity, Crosshair, Inbox, Minus, Percent, Timer } from "lucide-react";
 
 export function StatsBar() {
   const status = useFeedStore((s) => s.status);
   const poolCount = useFeedStore((s) => s.pools.length);
 
-  const total = (status?.snipes ?? 0) + (status?.rejects ?? 0);
-  const snipeRate = total > 0 ? `${Math.round(((status?.snipes ?? 0) / total) * 100)}%` : "—";
+  const total = (status?.buys ?? 0) + (status?.skips ?? 0);
+  const buyRate = total > 0 ? `${Math.round(((status?.buys ?? 0) / total) * 100)}%` : "—";
 
   const stats = [
     {
@@ -20,23 +20,23 @@ export function StatsBar() {
       ring: "border-border",
     },
     {
-      label: "Snipe",
-      value: status?.snipes ?? 0,
+      label: "Buy",
+      value: status?.buys ?? 0,
       icon: Crosshair,
       tone: "text-accent-green",
       ring: "border-accent-green/30",
     },
     {
-      label: "Reject",
-      value: status?.rejects ?? 0,
-      icon: Ban,
-      tone: "text-accent-red",
-      ring: "border-accent-red/30",
+      label: "Skip",
+      value: status?.skips ?? 0,
+      icon: Minus,
+      tone: "text-fg-muted",
+      ring: "border-border",
     },
     {
-      label: "Pass rate",
-      value: snipeRate,
-      icon: FilterIcon,
+      label: "Buy rate",
+      value: buyRate,
+      icon: Percent,
       tone: "text-accent-blue",
       ring: "border-accent-blue/30",
     },

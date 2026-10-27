@@ -1,10 +1,9 @@
 "use client";
 
 import { memo } from "react";
-import type { OrchestratorVerdict, PoolEvent } from "@sniperbot/shared";
+import type { PoolDecision, PoolEvent } from "@sniperbot/shared";
 import { ChevronDown, ChevronRight, ExternalLink } from "lucide-react";
 import { formatPriceUsd, formatRelativeTime, formatUsd, shortAddress } from "@/lib/format";
-import { FilterPills } from "./FilterPills";
 import { DecisionBadge } from "./DecisionBadge";
 import { TokenCell } from "./TokenCell";
 import { useFeedStore } from "@/lib/store";
@@ -21,11 +20,11 @@ const SOURCE_STYLES: Record<string, { label: string; cls: string }> = {
 
 interface PoolRowProps {
   pool: PoolEvent;
-  verdict?: OrchestratorVerdict;
+  decision?: PoolDecision;
   isNew?: boolean;
 }
 
-function PoolRowImpl({ pool, verdict, isNew }: PoolRowProps) {
+function PoolRowImpl({ pool, decision, isNew }: PoolRowProps) {
   const expandedSig = useFeedStore((s) => s.expandedSig);
   const toggleExpanded = useFeedStore((s) => s.toggleExpanded);
   const expanded = expandedSig === pool.signature;
@@ -38,11 +37,7 @@ function PoolRowImpl({ pool, verdict, isNew }: PoolRowProps) {
   const solscanUrl = `https://solscan.io/tx/${pool.signature}`;
 
   const decisionRing =
-    verdict?.decision === "snipe"
-      ? "border-l-2 border-l-accent-green"
-      : verdict?.decision === "reject"
-        ? "border-l-2 border-l-accent-red/50"
-        : "border-l-2 border-l-border";
+    decision?.decision === "buy" ? "border-l-2 border-l-accent-green" : "border-l-2 border-l-border";
 
   return (
     <div
@@ -73,7 +68,7 @@ function PoolRowImpl({ pool, verdict, isNew }: PoolRowProps) {
           {/* Mint + decision */}
           <div className="col-span-12 sm:col-span-5 lg:col-span-5 min-w-0 flex flex-col gap-1.5">
             <div className="flex items-center gap-2 min-w-0">
-              <DecisionBadge decision={verdict?.decision} score={verdict?.totalScore} />
+              <DecisionBadge decision={decision?.decision} />
               <TokenCell
                 mint={pool.tokenMint}
                 name={pool.token?.name}
@@ -110,18 +105,12 @@ function PoolRowImpl({ pool, verdict, isNew }: PoolRowProps) {
             <ChevronIcon expanded={expanded} />
           </div>
 
-          {/* Filter pills row */}
-          {verdict && (
-            <div className="col-span-12">
-              <FilterPills results={verdict.results} compact />
-            </div>
-          )}
         </div>
       </button>
 
-      {expanded && verdict && (
+      {expanded && (
         <ExpandedDetail
-          verdict={verdict}
+          decision={decision}
           dexscreenerUrl={dexscreenerUrl}
           solscanUrl={solscanUrl}
         />
@@ -139,34 +128,20 @@ function ChevronIcon({ expanded }: { expanded: boolean }) {
 }
 
 function ExpandedDetail({
-  verdict,
+  decision,
   dexscreenerUrl,
   solscanUrl,
 }: {
-  verdict: OrchestratorVerdict;
+  decision?: PoolDecision;
   dexscreenerUrl: string;
   solscanUrl: string;
 }) {
   return (
     <div className="border-t border-border bg-bg-elevated p-3 sm:p-4">
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-2 text-xs">
-        <div className="flex items-center gap-3 text-fg-muted">
-          <span>
-            Score{" "}
-            <span className="font-mono text-fg">
-              {verdict.totalScore}/{verdict.maxScore}
-            </span>
-          </span>
-          <span>
-            Pass <span className="font-mono text-accent-green">{verdict.passedCount}</span>
-          </span>
-          <span>
-            Fail <span className="font-mono text-accent-red">{verdict.failedCount}</span>
-          </span>
-          <span className="font-mono text-fg-subtle">
-            {verdict.totalDurationMs}ms
-          </span>
-        </div>
+      <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+        <p className="text-fg-muted">
+          <span className="text-fg-subtle">Strategy:</span> {decision ? decision.reason : "not decided yet"}
+        </p>
         <div className="flex gap-2">
           <a
             href={dexscreenerUrl}
@@ -188,54 +163,7 @@ function ExpandedDetail({
           </a>
         </div>
       </div>
-
-      <div className="overflow-x-auto">
-        <table className="w-full text-xs">
-          <thead>
-            <tr className="text-left text-fg-subtle">
-              <th className="font-medium pb-2 pr-4">Filter</th>
-              <th className="font-medium pb-2 pr-4">Status</th>
-              <th className="font-medium pb-2 pr-4">Reason</th>
-              <th className="font-medium pb-2 text-right">ms</th>
-            </tr>
-          </thead>
-          <tbody className="text-fg">
-            {verdict.results.map((r) => (
-              <tr key={r.filterId} className="border-t border-border-subtle">
-                <td className="py-1.5 pr-4 font-mono text-[11px] text-fg-muted">{r.filterId}</td>
-                <td className="py-1.5 pr-4">
-                  <StatusCell status={r.status} />
-                </td>
-                <td className="py-1.5 pr-4 text-fg">{r.reason}</td>
-                <td className="py-1.5 text-right font-mono tabular-nums text-fg-subtle">
-                  {r.durationMs}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      <p className="mt-3 text-xs text-fg-muted">
-        <span className="text-fg-subtle">Decision reason:</span> {verdict.decisionReason}
-      </p>
     </div>
-  );
-}
-
-function StatusCell({ status }: { status: "pass" | "fail" | "skip" | "error" }) {
-  const cls =
-    status === "pass"
-      ? "text-accent-green"
-      : status === "fail"
-        ? "text-accent-red"
-        : status === "error"
-          ? "text-accent-amber"
-          : "text-fg-dim";
-  return (
-    <span className={`font-mono text-[11px] uppercase tracking-wider ${cls}`}>
-      {status}
-    </span>
   );
 }
 

@@ -2,12 +2,8 @@
 
 import { io, type Socket } from "socket.io-client";
 import type {
-  AnalyticsSnapshot,
-  BacktestSummary,
   BankrollSnapshot,
-  FilterConfigDelta,
-  FilterPreset,
-  OrchestratorVerdict,
+  PoolDecision,
   PoolEvent,
   Position,
   PositionClosedEvent,
@@ -23,14 +19,10 @@ export interface SystemStatus {
   skipped: number;
   queued: number;
   uptime: number;
-  syntheticFeed: boolean;
-  snipes: number;
-  rejects: number;
-  filterCount: number;
-  filterQueue: number;
+  buys: number;
+  skips: number;
   openPositions: number;
   realizedPnlUsd: number;
-  activePreset: string | null;
   botOn: boolean;
   feedLive: boolean;
   rpcRequests: number;
@@ -39,50 +31,25 @@ export interface SystemStatus {
 
 export interface ServerToClientEvents {
   "pool:new": (event: PoolEvent) => void;
-  "verdict:new": (verdict: OrchestratorVerdict) => void;
+  "decision:new": (decision: PoolDecision) => void;
   "system:status": (status: SystemStatus) => void;
   "position:opened": (e: PositionOpenedEvent) => void;
   "position:update": (e: PositionUpdateEvent) => void;
   "position:closed": (e: PositionClosedEvent) => void;
   "bankroll:snapshot": (snap: BankrollSnapshot) => void;
-  "preset:changed": (msg: { activeName: string | null }) => void;
   "stats:reset": () => void;
 }
 
 export interface ClientToServerEvents {
   "pool:replay": (count: number, ack: (events: PoolEvent[]) => void) => void;
-  "verdict:replay": (
-    count: number,
-    ack: (verdicts: OrchestratorVerdict[]) => void,
-  ) => void;
+  "decision:replay": (count: number, ack: (decisions: PoolDecision[]) => void) => void;
   "positions:list": (
     ack: (data: { open: Position[]; recentlyClosed: Position[] }) => void,
   ) => void;
   "bankroll:get": (ack: (snap: BankrollSnapshot) => void) => void;
-  "analytics:get": (ack: (snap: AnalyticsSnapshot) => void) => void;
   "stats:get": (
     windowKey: StatsWindowKey,
     ack: (result: { ok: boolean; stats?: TradeStatsWindow; error?: string }) => void,
-  ) => void;
-  "presets:list": (
-    ack: (data: { presets: FilterPreset[]; activeName: string | null }) => void,
-  ) => void;
-  "preset:activate": (
-    presetId: string,
-    ack: (result: { ok: boolean; preset?: FilterPreset; error?: string }) => void,
-  ) => void;
-  "preset:deactivate": (ack: (result: { ok: boolean }) => void) => void;
-  "preset:save": (
-    payload: { name: string; description?: string; config: FilterConfigDelta },
-    ack: (result: { ok: boolean; preset?: FilterPreset; error?: string }) => void,
-  ) => void;
-  "preset:delete": (
-    presetId: string,
-    ack: (result: { ok: boolean; error?: string }) => void,
-  ) => void;
-  "backtest:run": (
-    payload: { presetName: string; config: FilterConfigDelta; limit?: number },
-    ack: (result: { ok: boolean; summary?: BacktestSummary; error?: string }) => void,
   ) => void;
   "bot:set": (on: boolean, ack: (result: { ok: boolean; botOn: boolean; error?: string }) => void) => void;
   "stats:reset": (ack: (result: { ok: boolean; error?: string }) => void) => void;

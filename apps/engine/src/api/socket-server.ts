@@ -1,12 +1,8 @@
 import { createServer, type Server as HttpServer } from "node:http";
 import { Server as IOServer } from "socket.io";
 import type {
-  AnalyticsSnapshot,
-  BacktestSummary,
   BankrollSnapshot,
-  FilterConfigDelta,
-  FilterPreset,
-  OrchestratorVerdict,
+  PoolDecision,
   PoolEvent,
   Position,
   PositionClosedEvent,
@@ -18,72 +14,38 @@ import type {
 import { env } from "../config/env.js";
 import { childLogger } from "../utils/logger.js";
 import { getRecentPools } from "../state/pool-stream.js";
-import { getRecentVerdicts } from "../state/verdict-stream.js";
+import { getRecentDecisions, type DecisionLog } from "../state/decision-stream.js";
 import type { PoolDetector } from "../feeds/pool-detector.js";
-import type { FilterOrchestrator } from "../filters/orchestrator.js";
 import type { PositionStore } from "../state/position-store.js";
 import type { PnlTracker } from "../analytics/pnl-tracker.js";
-import type { DrawdownCircuit, HaltReason } from "../risk/drawdown-circuit.js";
 import type { BotSwitch } from "../execution/bot-switch.js";
 import { rpcUsage } from "../utils/rpc-meter.js";
-import { computeAnalytics } from "../analytics/filter-performance.js";
 import { computeStatsWindow } from "../analytics/stats-window.js";
-import { runBacktest } from "../analytics/backtest.js";
-import {
-  activatePreset,
-  deactivatePresets,
-  deletePreset,
-  listPresets,
-  savePreset,
-} from "../state/filter-presets.js";
-import { filterConfig } from "../config/filter-config.js";
 import { resolveTokenImage } from "../feeds/token-metadata.js";
 
 const log = childLogger("socket-server");
 
 export interface ServerToClientEvents {
   "pool:new": (event: PoolEvent) => void;
-  "verdict:new": (verdict: OrchestratorVerdict) => void;
+  "decision:new": (decision: PoolDecision) => void;
   "system:status": (status: SystemStatus) => void;
   "position:opened": (e: PositionOpenedEvent) => void;
   "position:update": (e: PositionUpdateEvent) => void;
   "position:closed": (e: PositionClosedEvent) => void;
   "bankroll:snapshot": (snap: BankrollSnapshot) => void;
-  "preset:changed": (preset: { activeName: string | null }) => void;
   "stats:reset": () => void;
 }
 
 export interface ClientToServerEvents {
   "pool:replay": (count: number, ack: (events: PoolEvent[]) => void) => void;
-  "verdict:replay": (count: number, ack: (verdicts: OrchestratorVerdict[]) => void) => void;
+  "decision:replay": (count: number, ack: (decisions: PoolDecision[]) => void) => void;
   "positions:list": (
     ack: (data: { open: Position[]; recentlyClosed: Position[] }) => void,
   ) => void;
   "bankroll:get": (ack: (snap: BankrollSnapshot) => void) => void;
-  "analytics:get": (ack: (snap: AnalyticsSnapshot) => void) => void;
   "stats:get": (
     windowKey: StatsWindowKey,
     ack: (result: { ok: boolean; stats?: TradeStatsWindow; error?: string }) => void,
-  ) => void;
-  "presets:list": (
-    ack: (data: { presets: FilterPreset[]; activeName: string | null }) => void,
-  ) => void;
-  "preset:activate": (
-    presetId: string,
-    ack: (result: { ok: boolean; preset?: FilterPreset; error?: string }) => void,
-  ) => void;
-  "preset:deactivate": (ack: (result: { ok: boolean }) => void) => void;
-  "preset:save": (
-    payload: { name: string; description?: string; config: FilterConfigDelta },
-    ack: (result: { ok: boolean; preset?: FilterPreset; error?: string }) => void,
-  ) => void;
-  "preset:delete": (
-    presetId: string,
-    ack: (result: { ok: boolean; error?: string }) => void,
-  ) => void;
-  "backtest:run": (
-    payload: { presetName: string; config: FilterConfigDelta; limit?: number },
-    ack: (result: { ok: boolean; summary?: BacktestSummary; error?: string }) => void,
   ) => void;
   "bot:set": (on: boolean, ack: (result: { ok: boolean; botOn: boolean; error?: string }) => void) => void;
   "stats:reset": (ack: (result: { ok: boolean; error?: string }) => void) => void;
@@ -96,14 +58,10 @@ export interface SystemStatus {
   skipped: number;
   queued: number;
   uptime: number;
-  syntheticFeed: boolean;
-  snipes: number;
-  rejects: number;
-  filterCount: number;
-  filterQueue: number;
+  buys: number;
+  skips: number;
   openPositions: number;
   realizedPnlUsd: number;
-  activePreset: string | null;
   // false at every boot: no RPC subscription, no pools, no new positions
   botOn: boolean;
   // on, and something is actually delivering pools
@@ -111,25 +69,15 @@ export interface SystemStatus {
   // since the engine started — rpcRequests is roughly the credits spent
   rpcRequests: number;
   logNotifications: number;
-  circuit: {
-    halted: boolean;
-    haltReason: HaltReason | null;
-    haltUntilTs: number | null;
-    haltDetail: string | null;
-    consecutiveLosses: number;
-    dailyLossUsd: number;
-    weeklyLossUsd: number;
-  };
 }
 
 export class SocketServer {
   private http: HttpServer;
   private io: IOServer<ClientToServerEvents, ServerToClientEvents>;
   private readonly detector: PoolDetector;
-  private readonly orchestrator: FilterOrchestrator;
+  private readonly decisions: DecisionLog;
   private readonly positionStore: PositionStore;
   private readonly pnl: PnlTracker;
-  private readonly circuit: DrawdownCircuit;
   private readonly bot: BotSwitch;
   private readonly resetStats: () => Promise<void>;
   private readonly startedAt = Date.now();
@@ -137,18 +85,16 @@ export class SocketServer {
 
   constructor(
     detector: PoolDetector,
-    orchestrator: FilterOrchestrator,
+    decisions: DecisionLog,
     positionStore: PositionStore,
     pnl: PnlTracker,
-    circuit: DrawdownCircuit,
     bot: BotSwitch,
     resetStats: () => Promise<void>,
   ) {
     this.detector = detector;
-    this.orchestrator = orchestrator;
+    this.decisions = decisions;
     this.positionStore = positionStore;
     this.pnl = pnl;
-    this.circuit = circuit;
     this.resetStats = resetStats;
     this.bot = bot;
 
@@ -178,10 +124,9 @@ export class SocketServer {
         ack(recent);
       });
 
-      socket.on("verdict:replay", async (count, ack) => {
+      socket.on("decision:replay", async (count, ack) => {
         const safe = Math.min(Math.max(1, count), 200);
-        const recent = await getRecentVerdicts(safe);
-        ack(recent);
+        ack(await getRecentDecisions(safe));
       });
 
       socket.on("positions:list", (ack) => {
@@ -195,81 +140,12 @@ export class SocketServer {
         ack(this.pnl.buildSnapshot());
       });
 
-      socket.on("analytics:get", async (ack) => {
-        try {
-          const snap = await computeAnalytics();
-          ack(snap);
-        } catch (err) {
-          log.warn({ err }, "analytics:get failed");
-        }
-      });
-
       socket.on("stats:get", async (windowKey, ack) => {
         try {
           const stats = await computeStatsWindow(windowKey);
           ack({ ok: true, stats });
         } catch (err) {
           log.warn({ err, windowKey }, "stats:get failed");
-          ack({ ok: false, error: (err as Error).message });
-        }
-      });
-
-      socket.on("presets:list", async (ack) => {
-        try {
-          const presets = await listPresets();
-          ack({ presets, activeName: filterConfig.activeName() });
-        } catch (err) {
-          log.warn({ err }, "presets:list failed");
-        }
-      });
-
-      socket.on("preset:activate", async (presetId, ack) => {
-        try {
-          const preset = await activatePreset(presetId);
-          this.io.emit("preset:changed", { activeName: preset.name });
-          ack({ ok: true, preset });
-        } catch (err) {
-          ack({ ok: false, error: (err as Error).message });
-        }
-      });
-
-      socket.on("preset:deactivate", async (ack) => {
-        try {
-          await deactivatePresets();
-          this.io.emit("preset:changed", { activeName: null });
-          ack({ ok: true });
-        } catch {
-          ack({ ok: false });
-        }
-      });
-
-      socket.on("preset:save", async (payload, ack) => {
-        try {
-          const preset = await savePreset(payload);
-          ack({ ok: true, preset });
-        } catch (err) {
-          ack({ ok: false, error: (err as Error).message });
-        }
-      });
-
-      socket.on("preset:delete", async (id, ack) => {
-        try {
-          await deletePreset(id);
-          ack({ ok: true });
-        } catch (err) {
-          ack({ ok: false, error: (err as Error).message });
-        }
-      });
-
-      socket.on("backtest:run", async (payload, ack) => {
-        try {
-          const summary = await runBacktest(this.orchestrator, {
-            presetName: payload.presetName,
-            delta: payload.config,
-            limit: payload.limit ?? 500,
-          });
-          ack({ ok: true, summary });
-        } catch (err) {
           ack({ ok: false, error: (err as Error).message });
         }
       });
@@ -319,7 +195,7 @@ export class SocketServer {
     });
 
     this.detector.on("pool", (event) => this.io.emit("pool:new", event));
-    this.orchestrator.on("verdict", (verdict) => this.io.emit("verdict:new", verdict));
+    this.decisions.on("decision", (decision) => this.io.emit("decision:new", decision));
     this.positionStore.on("position-opened", (e) => {
       this.io.emit("position:opened", e);
       // the buy moves "invested" and exposure now, not at the next close
@@ -334,35 +210,21 @@ export class SocketServer {
 
   private buildStatus(): SystemStatus {
     const detectorStats = this.detector.getStats();
-    const orchStats = this.orchestrator.getStats();
+    const decisionStats = this.decisions.getStats();
     const posStats = this.positionStore.getStats();
-    const circuitStats = this.circuit.getStats();
     return {
       mode: env.MODE,
       detectedTotal: detectorStats.parsed,
       skipped: detectorStats.skipped,
       queued: detectorStats.queued,
       uptime: Date.now() - this.startedAt,
-      syntheticFeed: env.SYNTHETIC_FEED,
-      snipes: orchStats.snipes,
-      rejects: orchStats.rejects,
-      filterCount: orchStats.filters,
-      filterQueue: orchStats.queued,
+      buys: decisionStats.buys,
+      skips: decisionStats.skips,
       openPositions: posStats.open,
       realizedPnlUsd: posStats.realizedPnlUsd,
-      activePreset: filterConfig.activeName(),
       botOn: this.bot.isOn(),
       feedLive: this.bot.feedLive(),
       ...rpcUsage(),
-      circuit: {
-        halted: circuitStats.halted,
-        haltReason: circuitStats.haltReason,
-        haltUntilTs: circuitStats.haltUntilTs,
-        haltDetail: circuitStats.haltDetail,
-        consecutiveLosses: circuitStats.consecutiveLosses,
-        dailyLossUsd: circuitStats.dailyLossUsd,
-        weeklyLossUsd: circuitStats.weeklyLossUsd,
-      },
     };
   }
 

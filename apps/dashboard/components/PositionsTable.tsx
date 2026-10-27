@@ -16,7 +16,7 @@ export function PositionsTable() {
   if (positions.length === 0) {
     return (
       <div className="rounded-lg border border-border bg-bg-card p-12 text-center text-sm text-fg-muted">
-        No open positions. Snipe verdicts from the live feed will appear here.
+        No open positions. What the strategy buys will appear here.
       </div>
     );
   }
@@ -33,8 +33,7 @@ export function PositionsTable() {
             <th className="px-3 py-2 text-right">Now</th>
             <th className="px-3 py-2 text-right">P&L</th>
             <th className="px-3 py-2 text-right">Peak</th>
-            <th className="px-3 py-2 text-center">TP</th>
-            <th className="px-3 py-2 text-center">Trail</th>
+            <th className="px-3 py-2 text-right">Sold</th>
             <th className="px-3 py-2 text-right">Age</th>
           </tr>
         </thead>
@@ -55,7 +54,7 @@ function PositionRow({ position: p }: { position: Position }) {
     : p.peakGainPct >= 0
       ? "text-fg"
       : "text-fg-muted";
-  const tpHit = p.tpLadder.filter((tp) => tp.hit).length;
+  const soldPct = p.initialTokens > 0 ? (1 - p.remainingTokens / p.initialTokens) * 100 : 0;
 
   return (
     <tr className="border-t border-border hover:bg-bg-elevated/50">
@@ -85,27 +84,13 @@ function PositionRow({ position: p }: { position: Position }) {
       <td className={`px-3 py-2 text-right tabular-nums ${peakClass}`}>
         +{p.peakGainPct.toFixed(0)}%
       </td>
-      <td className="px-3 py-2 text-center">
-        <div className="inline-flex gap-0.5">
-          {p.tpLadder.map((tp, i) => (
-            <span
-              key={i}
-              title={`+${tp.gainPct}% sell ${tp.sellPct}%`}
-              className={`h-2.5 w-2.5 rounded-sm ${
-                tp.hit ? "bg-accent-green" : "bg-bg-elevated border border-border"
-              }`}
-            />
-          ))}
-        </div>
-        <div className="text-[10px] text-fg-subtle mt-0.5">{tpHit}/{p.tpLadder.length}</div>
-      </td>
-      <td className="px-3 py-2 text-center">
-        {p.trailingStopArmed ? (
-          <span className="rounded bg-accent-blue/15 px-1.5 py-0.5 text-[10px] text-accent-blue">
-            ARMED
-          </span>
-        ) : (
-          <span className="text-fg-subtle text-[10px]">—</span>
+      <td className="px-3 py-2 text-right tabular-nums text-fg-muted">
+        {soldPct > 0 ? `${soldPct.toFixed(0)}%` : "—"}
+        {p.realizedPnlUsd !== 0 && (
+          <div className="text-[10px] text-fg-subtle">
+            {p.realizedPnlUsd > 0 ? "+" : ""}
+            {formatUsd(p.realizedPnlUsd)}
+          </div>
         )}
       </td>
       <td className="px-3 py-2 text-right text-fg-muted">{formatRelativeTime(p.openedAt)}</td>

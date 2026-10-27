@@ -2,38 +2,8 @@
 
 import { useFeedStore } from "@/lib/store";
 import { formatPriceUsd, formatUsd } from "@/lib/format";
-import type { ExitReason, Position } from "@sniperbot/shared";
+import type { Position } from "@sniperbot/shared";
 import { TokenCell } from "./TokenCell";
-
-const REASON_LABELS: Record<ExitReason, string> = {
-  tp1: "TP1",
-  tp2: "TP2",
-  tp3: "TP3",
-  tp4: "TP4",
-  "stop-loss": "SL",
-  "trailing-stop": "Trail",
-  "time-exit": "Time",
-  "dead-coin": "Dead",
-  migration: "Migrated",
-  "rug-pull": "Rug",
-  "kill-switch": "Kill",
-  manual: "Manual",
-};
-
-const REASON_TONE: Record<ExitReason, string> = {
-  tp1: "text-accent-green",
-  tp2: "text-accent-green",
-  tp3: "text-accent-green",
-  tp4: "text-accent-green",
-  "stop-loss": "text-accent-red",
-  "trailing-stop": "text-accent-blue",
-  "time-exit": "text-accent-amber",
-  "dead-coin": "text-accent-amber",
-  migration: "text-accent-green",
-  "rug-pull": "text-accent-red",
-  "kill-switch": "text-fg-muted",
-  manual: "text-fg-muted",
-};
 
 export function HistoryTable() {
   const closed = useFeedStore((s) => s.closedPositions);
@@ -112,8 +82,12 @@ function ClosedRow({ position: p }: { position: Position }) {
         {pnlPct.toFixed(1)}%
       </td>
       <td className="px-3 py-2 text-center">
-        <span className={`rounded bg-bg-elevated px-1.5 py-0.5 text-[10px] font-medium ${REASON_TONE[reason]}`}>
-          {REASON_LABELS[reason]}
+        <span
+          className={`rounded bg-bg-elevated px-1.5 py-0.5 text-[10px] font-medium ${
+            p.realizedPnlUsd > 0 ? "text-accent-green" : "text-fg-muted"
+          }`}
+        >
+          {reason}
         </span>
       </td>
       <td className="px-3 py-2 text-right text-fg-muted">{heldStr}</td>

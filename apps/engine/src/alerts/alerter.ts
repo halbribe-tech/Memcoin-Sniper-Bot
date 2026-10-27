@@ -1,5 +1,4 @@
 import type { Position, PositionClosedEvent, PositionOpenedEvent } from "@sniperbot/shared";
-import type { HaltState } from "../risk/drawdown-circuit.js";
 import { DAY_MS, nextUtcHour, summarize, type ClosedTrade } from "./daily-summary.js";
 import * as fmt from "./format.js";
 import type { AlertLog, AlertSink } from "./queue.js";
@@ -7,7 +6,6 @@ import type { AlertLog, AlertSink } from "./queue.js";
 export interface AlertFlags {
   newPosition: boolean;
   exit: boolean;
-  drawdownHalt: boolean;
   dailyPnl: boolean;
   engineStatus: boolean;
 }
@@ -16,13 +14,6 @@ export interface AlertFlags {
 export interface PositionEvents {
   on(event: "position-opened", listener: (e: PositionOpenedEvent) => void): unknown;
   on(event: "position-closed", listener: (e: PositionClosedEvent) => void): unknown;
-  off(event: string, listener: (...args: any[]) => void): unknown;
-}
-
-/** The slice of DrawdownCircuit the alerter listens to. */
-export interface CircuitEvents {
-  on(event: "halt-engaged", listener: (state: HaltState) => void): unknown;
-  on(event: "halt-cleared", listener: () => void): unknown;
   off(event: string, listener: (...args: any[]) => void): unknown;
 }
 
@@ -38,7 +29,6 @@ export interface AlerterDeps {
   dailyHourUtc: number;
   sink: AlertSink;
   store: PositionEvents;
-  circuit: CircuitEvents;
   bankroll: () => BankrollView;
   /** Closed positions in [fromTs, toTs). Throwing falls back to memory. */
   loadClosed?: (fromTs: number, toTs: number) => Promise<ClosedTrade[]>;
@@ -82,26 +72,12 @@ export class Alerter {
     this.deps.sink.enqueue(fmt.positionClosed(position, this.deps.mode), priority);
   };
 
-  private readonly onHalt = (state: HaltState) => {
-    if (this.deps.flags.drawdownHalt) this.deps.sink.enqueue(fmt.haltEngaged(state, this.deps.mode), "critical");
-  };
-
-  private readonly onHaltCleared = () => {
-    if (this.deps.flags.drawdownHalt) this.deps.sink.enqueue(fmt.haltCleared(this.deps.mode));
-  };
-
-  /**
-   * Subscribe before the drawdown circuit does: the circuit reacts to the same
-   * close by halting, and the close should read before the halt it caused.
-   */
   start(): void {
     if (this.running) return;
     this.running = true;
-    const { store, circuit, flags } = this.deps;
+    const { store, flags } = this.deps;
     store.on("position-opened", this.onOpened);
     store.on("position-closed", this.onClosed);
-    circuit.on("halt-engaged", this.onHalt);
-    circuit.on("halt-cleared", this.onHaltCleared);
 
     if (flags.dailyPnl) {
       this.nextReportAt = nextUtcHour(this.now(), this.deps.dailyHourUtc);
@@ -122,11 +98,9 @@ export class Alerter {
   async stop(signal: string, flushTimeoutMs = 5000): Promise<void> {
     if (!this.running) return;
     this.running = false;
-    const { store, circuit, flags } = this.deps;
+    const { store, flags } = this.deps;
     store.off("position-opened", this.onOpened);
     store.off("position-closed", this.onClosed);
-    circuit.off("halt-engaged", this.onHalt);
-    circuit.off("halt-cleared", this.onHaltCleared);
     if (this.dailyTimer) clearTimeout(this.dailyTimer);
     this.dailyTimer = null;
 
@@ -240,7 +214,6 @@ export class Alerter {
     const out: string[] = [];
     if (f.newPosition) out.push("buys");
     if (f.exit) out.push("exits");
-    if (f.drawdownHalt) out.push("halts");
     if (f.dailyPnl) out.push(`daily report ${String(this.deps.dailyHourUtc).padStart(2, "0")}:00 UTC`);
     if (f.engineStatus) out.push("engine status");
     return out;

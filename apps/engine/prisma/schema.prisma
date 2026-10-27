@@ -22,11 +22,6 @@ enum DexSource {
   orca
 }
 
-enum Decision {
-  snipe
-  reject
-}
-
 enum PositionStatus {
   open
   partial
@@ -44,21 +39,6 @@ enum TradeStatus {
   partial
 }
 
-enum ExitReason {
-  tp1
-  tp2
-  tp3
-  tp4
-  stop_loss
-  trailing_stop
-  time_exit
-  dead_coin
-  migration
-  rug_pull
-  kill_switch
-  manual
-}
-
 // Every pool the engine has detected, regardless of decision.
 model Pool {
   id                   String     @id @default(cuid())
@@ -73,7 +53,6 @@ model Pool {
   signature            String
   rawEvent             Json?
 
-  filterResults        FilterResult[]
   positions            Position[]
 
   @@index([detectedAt])
@@ -81,29 +60,11 @@ model Pool {
   @@index([source])
 }
 
-// One row per filter run on a pool. Powers per-filter analytics.
-model FilterResult {
-  id           String   @id @default(cuid())
-  pool         Pool     @relation(fields: [poolId], references: [id], onDelete: Cascade)
-  poolId       String
-  filterId     String
-  passed       Boolean
-  score        Float
-  reason       String
-  metadata     Json?
-  evaluatedAt  DateTime
-  durationMs   Int
-
-  @@index([poolId])
-  @@index([filterId, passed])
-}
-
-// Final orchestrator decision on a pool.
+// The strategy's decision on a pool: "buy" or "skip", with its reason.
 model PoolDecision {
   id              String   @id @default(cuid())
   poolAddress     String   @unique
-  decision        Decision
-  totalScore      Float
+  decision        String
   decisionReason  String
   decidedAt       DateTime
 
@@ -126,14 +87,10 @@ model Position {
   realizedPnlUsd     Float          @default(0)
   peakPriceUsd       Float
   peakGainPct        Float          @default(0)
-  filterScore        Float          @default(0)
-  tpLadder           Json
-  stopLossPct        Float
-  trailingStopArmed  Boolean        @default(false)
   status             PositionStatus @default(open)
   openedAt           DateTime
   closedAt           DateTime?
-  closeReason        ExitReason?
+  closeReason        String?
 
   trades             Trade[]
 
@@ -156,40 +113,12 @@ model Trade {
   feeSol          Float
   slippagePct     Float
   mevPenaltyPct   Float?
-  exitReason      ExitReason?
+  exitReason      String?
   signature       String?
   executedAt      DateTime
 
   @@index([positionId])
   @@index([executedAt])
-}
-
-// Maintained list of dev wallets known to rug. Updated by background job.
-model RuggedDevWallet {
-  walletAddress    String   @id
-  rugCount         Int      @default(0)
-  totalLaunches    Int      @default(0)
-  rugRate          Float    @default(0)
-  source           String?  // e.g. "rugcheck", "manual", "auto-detect"
-  notes            String?
-  firstSeenAt      DateTime @default(now())
-  lastUpdatedAt    DateTime @updatedAt
-
-  @@index([rugRate])
-}
-
-// Named filter configurations the user can switch between.
-model FilterPreset {
-  id          String   @id @default(cuid())
-  name        String   @unique
-  description String?
-  config      Json     // FilterConfigDelta payload
-  isActive    Boolean  @default(false)
-  isBuiltIn   Boolean  @default(false)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-
-  @@index([isActive])
 }
 
 // Snapshots of bankroll PnL for dashboard charts.

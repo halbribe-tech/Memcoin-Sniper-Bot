@@ -20,8 +20,7 @@ function makeSwitch(opts: { startFails?: boolean } = {}) {
       isLive: () => live,
     },
     detector: { clearPending: () => calls.push("detector.clear") },
-    orchestrator: { setLive: (on) => calls.push(`orchestrator.${on}`) },
-    trader: { setEnabled: (on) => calls.push(`trader.${on}`) },
+    broker: { setEnabled: (on) => calls.push(`broker.${on}`) },
   };
   return { bot: new BotSwitch(parts), calls };
 }
@@ -38,7 +37,7 @@ describe("bot switch", () => {
     const { bot, calls } = makeSwitch();
     await bot.set(true);
     assert.equal(bot.isOn(), true);
-    assert.deepEqual(calls, ["orchestrator.true", "feed.start", "trader.true"]);
+    assert.deepEqual(calls, ["feed.start", "broker.true"]);
   });
 
   test("off stops trading first, then unsubscribes and drops queued parses", async () => {
@@ -47,7 +46,7 @@ describe("bot switch", () => {
     calls.length = 0;
     await bot.set(false);
     assert.equal(bot.isOn(), false);
-    assert.deepEqual(calls, ["trader.false", "orchestrator.false", "feed.stop", "detector.clear"]);
+    assert.deepEqual(calls, ["broker.false", "feed.stop", "detector.clear"]);
   });
 
   test("a double click subscribes once", async () => {
@@ -56,11 +55,11 @@ describe("bot switch", () => {
     assert.equal(calls.filter((c) => c === "feed.start").length, 1);
   });
 
-  test("a feed that will not start leaves the bot off and the filters idle", async () => {
+  test("a feed that will not start leaves the bot off and trading disabled", async () => {
     const { bot, calls } = makeSwitch({ startFails: true });
     await assert.rejects(bot.set(true), /ws refused/);
     assert.equal(bot.isOn(), false);
-    assert.deepEqual(calls, ["orchestrator.true", "feed.start", "orchestrator.false"]);
+    assert.deepEqual(calls, ["feed.start"]);
     // and the switch still works afterwards
     await bot.set(false);
     assert.equal(bot.isOn(), false);

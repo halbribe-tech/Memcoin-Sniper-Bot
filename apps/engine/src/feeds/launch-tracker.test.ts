@@ -1,12 +1,8 @@
-import { after, describe, test } from "node:test";
+import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import { Keypair, PublicKey } from "@solana/web3.js";
-import type { PoolEvent } from "@sniperbot/shared";
-import { curveFillPct, LaunchTracker, launchTracker } from "./launch-tracker.js";
+import { curveFillPct, LaunchTracker } from "./launch-tracker.js";
 import { decodePumpCreateEvent } from "./parsers/pumpfun-event.js";
-import { bundledLaunchFilter } from "../filters/bundled-launch.js";
-import type { FilterContext } from "../filters/types.js";
-import { env } from "../config/env.js";
 
 // a real create_v2 with the dev's 0.99 SOL buy in the same transaction
 const CREATE_WITH_DEV_BUY = [
@@ -90,116 +86,22 @@ describe("launch tracker", () => {
   });
 });
 
-describe("bundled-launch on tracked launches", () => {
-  const ctx = { isSynthetic: false, cfg: { bundledLaunchReject: true } } as FilterContext;
-  const pool = { source: "pumpfun", tokenMint: MINT, poolAddress: MINT } as PoolEvent;
-
-  test("rejects while launch-slot buyers hold 15%+, passes once they have sold down, rejects a selling dev", async () => {
-    // the thresholds the test is written for, whatever .env says
-    const limits = env as { FILTER_BUNDLE_MAX_SUPPLY_PCT: number; FILTER_DEV_MAX_SOLD_PCT: number };
-    const before = { ...limits };
-    limits.FILTER_BUNDLE_MAX_SUPPLY_PCT = 15;
-    limits.FILTER_DEV_MAX_SOLD_PCT = 50;
-    after(() => Object.assign(limits, { FILTER_BUNDLE_MAX_SUPPLY_PCT: before.FILTER_BUNDLE_MAX_SUPPLY_PCT, FILTER_DEV_MAX_SOLD_PCT: before.FILTER_DEV_MAX_SOLD_PCT }));
-    launchTracker.ingest(CREATE_WITH_DEV_BUY, SLOT);
-    const sniper = wallet();
-    launchTracker.ingest(trade(sniper, true, 200_000_000n), SLOT);
-    assert.equal((await bundledLaunchFilter.evaluate(pool, ctx)).status, "fail");
-
-    launchTracker.ingest(trade(sniper, false, 100_000_000n), SLOT + 50);
-    assert.equal((await bundledLaunchFilter.evaluate(pool, ctx)).status, "pass");
-
-    launchTracker.ingest(trade(DEV, false, 30_000_000n), SLOT + 60);
-    const r = await bundledLaunchFilter.evaluate(pool, ctx);
-    assert.equal(r.status, "fail");
-    assert.match(r.reason, /dev already sold/);
-  });
-
-  test("a coin this run never saw launch is skipped, not passed", async () => {
-    const r = await bundledLaunchFilter.evaluate({ ...pool, tokenMint: wallet() }, ctx);
-    assert.equal(r.status, "skip");
-  });
-});
-
-describe("breakouts", () => {
-  const rule = { multiple: 2, minAgeSec: 5, minBuySol: 22, maxDevSoldPct: 100 };
+describe("curve", () => {
   function tracker() {
     const t = new LaunchTracker();
-    t.setBreakoutRule(rule);
-    const fired: string[] = [];
-    t.on("breakout", (m) => fired.push(m));
-    t.ingest(CREATE_WITH_DEV_BUY, SLOT, 0);
-    return { t, fired };
-  }
-
-  test("fires once when the curve doubles on 22+ SOL of buying, after 5s", () => {
-    const { t, fired } = tracker();
-    t.ingest(trade(wallet(), true, 10n, { priceX: 1.5, sol: 10 }), SLOT + 5, 3_000);
-    t.ingest(trade(wallet(), true, 10n, { priceX: 2.1, sol: 13 }), SLOT + 10, 4_000);
-    assert.deepEqual(fired, [], "doubled and 23 SOL, but only 4s old");
-    t.ingest(trade(wallet(), true, 10n, { priceX: 2.2, sol: 1 }), SLOT + 20, 8_000);
-    assert.deepEqual(fired, [MINT]);
-    t.ingest(trade(wallet(), true, 10n, { priceX: 3, sol: 5 }), SLOT + 30, 9_000);
-    assert.deepEqual(fired, [MINT], "a launch breaks out once");
-  });
-
-  test("not on thin buying, and not once the dev has sold out", () => {
-    const thin = tracker();
-    thin.t.ingest(trade(wallet(), true, 10n, { priceX: 2.5, sol: 5 }), SLOT + 20, 8_000);
-    assert.deepEqual(thin.fired, [], "5 SOL of buying is not a breakout");
-
-    const sold = tracker();
-    sold.t.ingest(trade(DEV, false, 40_000_000n), SLOT + 2, 2_000);
-    sold.t.ingest(trade(wallet(), true, 10n, { priceX: 2.5, sol: 30 }), SLOT + 20, 8_000);
-    assert.deepEqual(sold.fired, [], "the dev sold their whole buy");
-  });
-
-  test("without a rule nothing fires", () => {
-    const t = new LaunchTracker();
-    const fired: string[] = [];
-    t.on("breakout", (m) => fired.push(m));
-    t.ingest(CREATE_WITH_DEV_BUY, SLOT, 0);
-    t.ingest(trade(wallet(), true, 10n, { priceX: 3, sol: 40 }), SLOT + 20, 8_000);
-    assert.deepEqual(fired, []);
-  });
-});
-
-describe("curve fill", () => {
-  function tracker(pct: number | null = 90) {
-    const t = new LaunchTracker();
-    t.setFillRule(pct);
-    const fired: string[] = [];
     const completed: string[] = [];
-    t.on("fill", (m) => fired.push(m));
+    const trades: number[] = [];
     t.on("complete", (m) => completed.push(m));
+    t.on("trade", (tr) => trades.push(tr.slot));
     t.ingest(CREATE_WITH_DEV_BUY, SLOT, 0);
-    return { t, fired, completed };
+    return { t, completed, trades };
   }
 
-  test("fires once when the curve is first 90% sold, after 5s", () => {
-    const { t, fired } = tracker();
-    t.ingest(trade(wallet(), true, 10n, { fillPct: 91 }), SLOT + 5, 3_000);
-    assert.deepEqual(fired, [], "91% sold, but only 3s old");
-    t.ingest(trade(wallet(), true, 10n, { fillPct: 85 }), SLOT + 10, 6_000);
-    assert.deepEqual(fired, [], "85% is short of the rule");
-    t.ingest(trade(wallet(), true, 10n, { fillPct: 92 }), SLOT + 20, 8_000);
-    assert.deepEqual(fired, [MINT]);
-    t.ingest(trade(wallet(), true, 10n, { fillPct: 95 }), SLOT + 30, 9_000);
-    assert.deepEqual(fired, [MINT], "a launch fills once");
-  });
-
-  test("not on a sold-out curve, not after 25 minutes, not without a rule", () => {
-    const soldOut = tracker();
-    soldOut.t.ingest(trade(wallet(), true, 10n, { fillPct: 100 }), SLOT + 20, 8_000);
-    assert.deepEqual(soldOut.fired, []);
-
-    const late = tracker();
-    late.t.ingest(trade(wallet(), true, 10n, { fillPct: 92 }), SLOT + 20, 26 * 60_000);
-    assert.deepEqual(late.fired, []);
-
-    const off = tracker(null);
-    off.t.ingest(trade(wallet(), true, 10n, { fillPct: 92 }), SLOT + 20, 8_000);
-    assert.deepEqual(off.fired, []);
+  test("every trade on a tradable launch is passed on with its slot and price", () => {
+    const { t, trades } = tracker();
+    t.ingest(trade(wallet(), true, 10n, { fillPct: 40 }), SLOT + 3, 1_000);
+    assert.deepEqual(trades.slice(-1), [SLOT + 3]);
+    assert.ok(Math.abs(t.stats(MINT, 1_000)!.curveFillPct - 40) < 1e-6);
   });
 
   test("a CompleteEvent marks the curve complete and is passed on for any mint", () => {
@@ -217,47 +119,3 @@ describe("curve fill", () => {
   });
 });
 
-describe("copy wallets", () => {
-  const followed = [wallet(), wallet(), wallet()];
-  function tracker(minWallets = 3) {
-    const t = new LaunchTracker();
-    t.setCopyRule({ wallets: new Set(followed), minWallets });
-    const fired: Array<[string, string[]]> = [];
-    t.on("copy", (m, w) => fired.push([m, w]));
-    t.ingest(CREATE_WITH_DEV_BUY, SLOT, 0);
-    return { t, fired };
-  }
-
-  test("fires once when the third followed wallet buys, naming them", () => {
-    const { t, fired } = tracker();
-    t.ingest(trade(followed[0]!, true, 10n), SLOT + 2, 1_000);
-    t.ingest(trade(wallet(), true, 10n), SLOT + 3, 2_000);
-    t.ingest(trade(followed[0]!, true, 10n), SLOT + 4, 3_000);
-    t.ingest(trade(followed[1]!, true, 10n), SLOT + 5, 4_000);
-    assert.deepEqual(fired, [], "two different followed wallets, one of them twice");
-    t.ingest(trade(followed[2]!, true, 10n), SLOT + 6, 5_000);
-    assert.deepEqual(fired, [[MINT, followed]]);
-    t.ingest(trade(wallet(), true, 10n), SLOT + 7, 6_000);
-    assert.equal(fired.length, 1);
-  });
-
-  test("with a strong count above the minimum, every new followed buyer up to it is a signal", () => {
-    const t = new LaunchTracker();
-    t.setCopyRule({ wallets: new Set(followed), minWallets: 1, strongWallets: 3 });
-    const counts: number[] = [];
-    t.on("copy", (_m, w) => counts.push(w.length));
-    t.ingest(CREATE_WITH_DEV_BUY, SLOT, 0);
-    for (const [i, w] of [followed[0]!, followed[0]!, followed[1]!, followed[2]!, wallet()].entries()) {
-      t.ingest(trade(w, true, 10n), SLOT + 2 + i, 1_000 + i);
-    }
-    assert.deepEqual(counts, [1, 2, 3]);
-  });
-
-  test("buys in the create slot, sells, and buys after 30 minutes do not count", () => {
-    const { t, fired } = tracker(2);
-    t.ingest(trade(followed[0]!, true, 10n), SLOT, 0);
-    t.ingest(trade(followed[1]!, false, 10n), SLOT + 2, 1_000);
-    t.ingest(trade(followed[2]!, true, 10n), SLOT + 3, 31 * 60_000);
-    assert.deepEqual(fired, []);
-  });
-});

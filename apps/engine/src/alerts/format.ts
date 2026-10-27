@@ -1,5 +1,4 @@
 import type { Position } from "@sniperbot/shared";
-import type { HaltState } from "../risk/drawdown-circuit.js";
 import type { DailySummary } from "./daily-summary.js";
 
 /**
@@ -118,7 +117,7 @@ export function positionOpened(p: Position, mode: Mode): string {
   const name = escapeHtml(tokenLabel(p.tokenSymbol, p.tokenMint));
   return [
     `🟢 ${modeTag(mode)} Bought <b>${name}</b>`,
-    `${usd(p.entrySizeUsd)} at ${price(p.entryPriceUsd)} · score ${Math.round(p.filterScore)}`,
+    `${usd(p.entrySizeUsd)} at ${price(p.entryPriceUsd)}`,
     `${escapeHtml(p.source)} · ${chartLink(p.poolAddress)} · <code>${escapeHtml(p.tokenMint)}</code>`,
   ].join("\n");
 }
@@ -136,18 +135,6 @@ export function positionClosed(p: Position, mode: Mode): string {
     `<b>${signedUsd(p.realizedPnlUsd)}</b> (${signedPct(realizedPct(p))}) on ${usd(p.entrySizeUsd)} · peak ${signedPct(p.peakGainPct)}${held}`,
     chartLink(p.poolAddress),
   ].join("\n");
-}
-
-export function haltEngaged(state: HaltState, mode: Mode): string {
-  return [
-    `⛔ ${modeTag(mode)} <b>Trading halted</b> — ${escapeHtml(state.reason)}`,
-    escapeHtml(state.detail),
-    `New entries paused until ${utcStamp(state.untilTs)}. Open positions keep their exits.`,
-  ].join("\n");
-}
-
-export function haltCleared(mode: Mode): string {
-  return `▶️ ${modeTag(mode)} Halt cleared — new entries allowed again.`;
 }
 
 export interface EngineInfo {
