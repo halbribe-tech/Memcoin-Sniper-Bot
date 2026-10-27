@@ -1,3 +1,5 @@
-launches.jsonl*
+*.jsonl
+*.pkl
 .venv/
 __pycache__/
+wallets/

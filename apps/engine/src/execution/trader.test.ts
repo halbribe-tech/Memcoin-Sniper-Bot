@@ -66,6 +66,7 @@ describe("entries", () => {
     let quoted = 0;
     const store = {
       count: () => added.length,
+      list: () => added.map((a) => a.position),
       add: (position: Position, profile: unknown) => added.push({ position, profile }),
     } as unknown as PositionStore;
     const pnl = { buildSnapshot: () => ({ openExposureUsd: 0, balanceUsd: 10_000 }) } as unknown as PnlTracker;
@@ -102,6 +103,13 @@ describe("entries", () => {
     assert.equal(added[0]!.profile, undefined, "a real pool is priced by the feed, not simulated");
   });
 
+  test("a coin is held at most once, even when two verdicts arrive together", async () => {
+    const { trader, added } = makeLiveTrader({ ok: true, priceUsd: 2, liquidityUsd: 100_000, premiumPct: 3 });
+    await Promise.all([trader.handleVerdict(verdict, realPool), trader.handleVerdict(verdict, realPool)]);
+    await trader.handleVerdict(verdict, realPool);
+    assert.equal(added.length, 1);
+  });
+
   test("a synthetic pool keeps its simulated price and never asks the market", async () => {
     const { trader, added, quoted } = makeLiveTrader({ ok: false, reason: "unused" });
     const synthetic = { ...realPool, rawEvent: { synthetic: true, bucket: "SOLID" } } as PoolEvent;
@@ -133,7 +141,7 @@ describe("momentum at the buy", () => {
   function liveTrader() {
     const added: Position[] = [];
     let quoted = 0;
-    const store = { count: () => added.length, add: (p: Position) => added.push(p) } as unknown as PositionStore;
+    const store = { count: () => added.length, list: () => added, add: (p: Position) => added.push(p) } as unknown as PositionStore;
     const pnl = { buildSnapshot: () => ({ openExposureUsd: 0, balanceUsd: 10_000 }) } as unknown as PnlTracker;
     const circuit = { canTrade: () => ({ allowed: true }) } as unknown as DrawdownCircuit;
     const feed = {
@@ -182,7 +190,7 @@ describe("entry price from the curve", () => {
   function trader(jupiter: EntryQuote) {
     const added: Position[] = [];
     let quoted = 0;
-    const store = { count: () => added.length, add: (p: Position) => added.push(p) } as unknown as PositionStore;
+    const store = { count: () => added.length, list: () => added, add: (p: Position) => added.push(p) } as unknown as PositionStore;
     const pnl = { buildSnapshot: () => ({ openExposureUsd: 0, balanceUsd: 10_000 }) } as unknown as PnlTracker;
     const circuit = { canTrade: () => ({ allowed: true }) } as unknown as DrawdownCircuit;
     const feed = {
@@ -199,7 +207,7 @@ describe("entry price from the curve", () => {
   const pool = { poolAddress: "C1", tokenMint: "C1", source: "pumpfun", initialPriceUsd: 0.000003, initialLiquidityUsd: 5400, detectedAt: 0 } as PoolEvent;
 
   test("a fresh curve prices the buy itself, so a lagging Jupiter index cannot refuse it", async () => {
-    launchTracker.curveState = () => ({ virtualSolLamports: 60_000_000_000n, virtualTokenRaw: 536_500_000_000_000n, at: Date.now() });
+    launchTracker.curveState = () => ({ virtualSolLamports: 60_000_000_000n, virtualTokenRaw: 536_500_000_000_000n, at: Date.now(), complete: false });
     const { t, added, quoted } = trader({ ok: false, reason: "price index and a real buy disagree by 34%" });
     await t.handleVerdict({ ...verdict, poolAddress: "C1" }, pool);
     assert.equal(quoted(), 0);
@@ -209,7 +217,7 @@ describe("entry price from the curve", () => {
   });
 
   test("a curve last traded long ago falls back to Jupiter", async () => {
-    launchTracker.curveState = () => ({ virtualSolLamports: 60_000_000_000n, virtualTokenRaw: 536_500_000_000_000n, at: Date.now() - 60_000 });
+    launchTracker.curveState = () => ({ virtualSolLamports: 60_000_000_000n, virtualTokenRaw: 536_500_000_000_000n, at: Date.now() - 60_000, complete: false });
     const { t, quoted } = trader({ ok: false, reason: "no market price" });
     await t.handleVerdict({ ...verdict, poolAddress: "C1" }, pool);
     assert.equal(quoted(), 1);

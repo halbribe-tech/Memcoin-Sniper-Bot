@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { decodePumpCreateEvent, decodeTradeEvents, isSolPaired } from "./parsers/pumpfun-event.js";
+import { decodeCompleteEvents, decodePumpCreateEvent, decodeTradeEvents, isSolPaired } from "./parsers/pumpfun-event.js";
 
 // raw units: 1B tokens at 6 decimals
 const TOTAL_SUPPLY_RAW = 1_000_000_000_000_000n;
@@ -9,6 +9,19 @@ const LAUNCH_SLOTS = 1;
 const FORGET_AFTER_MS = 45 * 60_000;
 // a breakout this late is not a launch any more
 const BREAKOUT_WINDOW_MS = 15 * 60_000;
+// a curve starts with 1.073B virtual tokens and sells 793.1M of them before it completes
+const INITIAL_VIRTUAL_TOKENS_RAW = 1_073_000_000_000_000n;
+const CURVE_SALE_RAW = 793_100_000_000_000n;
+// the recorded launches that reached a fill level did so within 25 minutes
+const FILL_WINDOW_MS = 25 * 60_000;
+const FILL_MIN_AGE_MS = 5000;
+// copy signals only count while the launch is young enough to have recorded data behind the rule
+const COPY_WINDOW_MS = 30 * 60_000;
+
+/** How much of the curve's sellable supply has been bought, 0-100. */
+export function curveFillPct(virtualTokenRaw: bigint): number {
+  return (Number(INITIAL_VIRTUAL_TOKENS_RAW - virtualTokenRaw) / Number(CURVE_SALE_RAW)) * 100;
+}
 
 interface Launch {
   slot: number;
@@ -23,6 +36,10 @@ interface Launch {
   // non-dev wallets that bought in the launch slots → tokens they still hold
   launchBuyers: Map<string, bigint>;
   brokeOut: boolean;
+  filled: boolean;
+  // copied wallets that have bought since the create slot
+  copyBuyers: Set<string>;
+  copied: boolean;
   // the curve's virtual reserves after the last trade the stream delivered
   curve: CurveState;
 }
@@ -32,6 +49,8 @@ export interface CurveState {
   virtualSolLamports: bigint;
   virtualTokenRaw: bigint;
   at: number;
+  /** the curve sold out and takes no more trades; the coin migrates to PumpSwap */
+  complete: boolean;
 }
 
 /** What a launch's first buyers did, as of now. */
@@ -46,6 +65,15 @@ export interface LaunchStats {
   buySol: number;
 }
 
+/** Which wallets copy mode follows, and how many of them make a signal. */
+export interface CopyRule {
+  wallets: ReadonlySet<string>;
+  /** the first count that is worth judging */
+  minWallets: number;
+  /** the count after which no more signals come; defaults to minWallets */
+  strongWallets?: number;
+}
+
 /** When a launch counts as breaking out; null leaves breakouts off. */
 export interface BreakoutRule {
   /** the curve's price over its start, e.g. 2 = doubled */
@@ -58,6 +86,12 @@ export interface BreakoutRule {
 
 interface TrackerEvents {
   breakout: (mint: string) => void;
+  // a launch's curve reached the fill rule's level
+  fill: (mint: string) => void;
+  // a curve completed, tracked or not
+  complete: (mint: string) => void;
+  // another copied wallet bought the launch, from the rule's minimum up to its strong count
+  copy: (mint: string, wallets: string[]) => void;
   // every trade on a tracked curve: its price and virtual SOL depth after the trade
   price: (mint: string, priceSol: number, virtualSol: number) => void;
 }
@@ -83,9 +117,24 @@ export class LaunchTracker extends EventEmitter {
   private readonly launches = new Map<string, Launch>();
   private lastSweep = 0;
   private breakoutRule: BreakoutRule | null = null;
+  private fillPct: number | null = null;
+  private copyRule: CopyRule | null = null;
 
   setBreakoutRule(rule: BreakoutRule | null): void {
     this.breakoutRule = rule;
+  }
+
+  /**
+   * Say "copy" each time another of `wallets` buys a launch after its create
+   * slot, from the `minWallets`th up to the `strongWallets`th; null leaves it off.
+   */
+  setCopyRule(rule: CopyRule | null): void {
+    this.copyRule = rule;
+  }
+
+  /** Say "fill" when a launch's curve is first `pct`% sold; null leaves it off. */
+  setFillRule(pct: number | null): void {
+    this.fillPct = pct;
   }
 
   ingest(logs: readonly string[], slot: number, now = Date.now()): void {
@@ -102,7 +151,15 @@ export class LaunchTracker extends EventEmitter {
         devHeld: 0n,
         launchBuyers: new Map(),
         brokeOut: false,
-        curve: { virtualSolLamports: created.virtualSolReserves, virtualTokenRaw: created.virtualTokenReserves, at: now },
+        filled: false,
+        copyBuyers: new Set(),
+        copied: false,
+        curve: {
+          virtualSolLamports: created.virtualSolReserves,
+          virtualTokenRaw: created.virtualTokenReserves,
+          at: now,
+          complete: false,
+        },
       });
     }
     for (const t of decodeTradeEvents(logs)) {
@@ -119,12 +176,20 @@ export class LaunchTracker extends EventEmitter {
         l.launchBuyers.set(t.user, t.tokenAmount);
       }
       if (t.virtualTokenReserves > 0n) {
-        l.curve = { virtualSolLamports: t.virtualSolReserves, virtualTokenRaw: t.virtualTokenReserves, at: now };
+        l.curve = { virtualSolLamports: t.virtualSolReserves, virtualTokenRaw: t.virtualTokenReserves, at: now, complete: false };
         const virtualSol = Number(t.virtualSolReserves) / 1e9;
         const priceSol = virtualSol / (Number(t.virtualTokenReserves) / 1e6);
         this.checkBreakout(t.mint, l, priceSol, slot, now);
+        this.checkFill(t.mint, l, slot, now);
+        if (t.isBuy) this.checkCopy(t.mint, l, t.user, slot, now);
         this.emit("price", t.mint, priceSol, virtualSol);
       }
+    }
+    // after the trades: the buy that sells out the curve completes it in the same transaction
+    for (const mint of decodeCompleteEvents(logs)) {
+      const l = this.launches.get(mint);
+      if (l) l.curve = { ...l.curve, complete: true };
+      this.emit("complete", mint);
     }
     if (now - this.lastSweep > 60_000) this.sweep(now);
   }
@@ -162,6 +227,29 @@ export class LaunchTracker extends EventEmitter {
     if (s.devBoughtPct > 0 && s.devSoldPct >= rule.maxDevSoldPct) return;
     l.brokeOut = true;
     this.emit("breakout", mint);
+  }
+
+  private checkFill(mint: string, l: Launch, slot: number, now: number): void {
+    const pct = this.fillPct;
+    if (pct === null || l.filled || !l.tradable || slot <= l.slot) return;
+    const age = now - l.seenAt;
+    if (age < FILL_MIN_AGE_MS || age > FILL_WINDOW_MS) return;
+    const fill = curveFillPct(l.curve.virtualTokenRaw);
+    // a sold-out curve cannot be bought any more
+    if (fill < pct || fill >= 100) return;
+    l.filled = true;
+    this.emit("fill", mint);
+  }
+
+  private checkCopy(mint: string, l: Launch, user: string, slot: number, now: number): void {
+    const rule = this.copyRule;
+    if (!rule || l.copied || !l.tradable || slot <= l.slot || !rule.wallets.has(user)) return;
+    if (now - l.seenAt > COPY_WINDOW_MS || l.curve.complete) return;
+    if (l.copyBuyers.has(user)) return;
+    l.copyBuyers.add(user);
+    if (l.copyBuyers.size < rule.minWallets) return;
+    if (l.copyBuyers.size >= (rule.strongWallets ?? rule.minWallets)) l.copied = true;
+    this.emit("copy", mint, [...l.copyBuyers]);
   }
 
   private sweep(now: number): void {

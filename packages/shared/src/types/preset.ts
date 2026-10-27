@@ -121,6 +121,58 @@ export const BUILT_IN_PRESETS: ReadonlyArray<{
     },
   },
   {
+    name: "Curve Fill",
+    description:
+      "For ENTRY_MODE=curve-fill: buys a curve that is 90% sold and sells on its migration. Replayed on recorded launches it was about break-even if the price holds through the migration; only the cheap safety checks stay on.",
+    config: {
+      enabled: {
+        "honeypot-sim": true,
+        "lp-locked": true,
+        "mint-authority": true,
+        "freeze-authority": true,
+        // the replay that picked this rule used no other filter
+        "bundled-launch": false,
+        "dev-wallet": false,
+        "curve-momentum": false,
+        "volume-velocity": false,
+        "social-signal": false,
+        "liquidity-min": false,
+        "top-holders": false,
+        "insider-detection": false,
+        "anti-sniper-war": false,
+      },
+      thresholds: {
+        minFilterScore: 0,
+      },
+    },
+  },
+  {
+    name: "Copy Wallets",
+    description:
+      "For ENTRY_MODE=copy: buys once 3 wallets from the copy list have bought a new coin. Replayed on recorded launches it made +4% a trade at $100 with a 1s delay, on only 59 trades; only the cheap safety checks stay on.",
+    config: {
+      enabled: {
+        "honeypot-sim": true,
+        "lp-locked": true,
+        "mint-authority": true,
+        "freeze-authority": true,
+        // the replay that picked this rule used no other filter
+        "bundled-launch": false,
+        "dev-wallet": false,
+        "curve-momentum": false,
+        "volume-velocity": false,
+        "social-signal": false,
+        "liquidity-min": false,
+        "top-holders": false,
+        "insider-detection": false,
+        "anti-sniper-war": false,
+      },
+      thresholds: {
+        minFilterScore: 0,
+      },
+    },
+  },
+  {
     name: "Learning",
     description:
       "Honeypot-only gating. Snipes everything else to gather analytics data. Run for a week.",

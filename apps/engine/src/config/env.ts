@@ -39,11 +39,25 @@ const envSchema = z.object({
   // "delay": judge every pump.fun launch EVAL_DELAY_SEC after it appears.
   // "breakout": judge a launch the moment its curve first reaches
   // BREAKOUT_MULTIPLE × its start price on real buying; other DEXes keep the delay.
-  ENTRY_MODE: z.enum(["delay", "breakout"]).default("delay"),
+  // "curve-fill": judge a launch the moment its curve is first CURVE_FILL_PCT% sold.
+  // "copy": judge it once COPY_MIN_WALLETS of the wallets in COPY_WALLETS_FILE have bought it.
+  ENTRY_MODE: z.enum(["delay", "breakout", "curve-fill", "copy"]).default("delay"),
   BREAKOUT_MULTIPLE: z.coerce.number().min(1).default(2),
   BREAKOUT_MIN_AGE_SEC: z.coerce.number().min(0).default(5),
   BREAKOUT_MIN_BUY_SOL: z.coerce.number().min(0).default(22),
   BREAKOUT_MAX_DEV_SOLD_PCT: z.coerce.number().min(0).max(100).default(100),
+  CURVE_FILL_PCT: z.coerce.number().min(1).max(99).default(90),
+  // JSON list of {address, name}, relative to the repo root
+  COPY_WALLETS_FILE: z.string().default("research/wallets/tracked.json"),
+  // from COPY_MIN_WALLETS copied wallets a coin is judged on the checklist (the preset named
+  // COPY_CHECKLIST_PRESET, or every default filter when empty) and needs COPY_CHECKLIST_MIN_SCORE;
+  // from COPY_STRONG_WALLETS it is bought on the active preset alone
+  COPY_MIN_WALLETS: z.coerce.number().int().min(1).default(3),
+  COPY_STRONG_WALLETS: z.coerce.number().int().min(1).default(3),
+  COPY_CHECKLIST_PRESET: z.string().default(""),
+  COPY_CHECKLIST_MIN_SCORE: z.coerce.number().min(0).max(100).default(70),
+  // sell the whole position once its curve completes, at the first market price after
+  EXIT_ON_MIGRATION: boolFromString.default(false),
   RUGCHECK_API_BASE: z.string().url().default("https://api.rugcheck.xyz/v1"),
 
   // Data APIs

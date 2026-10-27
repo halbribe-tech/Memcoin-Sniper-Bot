@@ -1,4 +1,4 @@
-import type { PoolEvent } from "@sniperbot/shared";
+import { BUILT_IN_PRESETS, type PoolEvent } from "@sniperbot/shared";
 import { env, isPaperMode } from "./config/env.js";
 import { logger } from "./utils/logger.js";
 import { closeRedis, pingRedis } from "./state/redis.js";
@@ -24,6 +24,8 @@ import { bootstrapPresets } from "./state/filter-presets.js";
 import { wipeStoredStats } from "./state/reset-stats.js";
 import { SOL_MINT } from "./feeds/parsers/common.js";
 import { launchTracker } from "./feeds/launch-tracker.js";
+import { loadCopyWallets } from "./feeds/copy-wallets.js";
+import { resolveDelta } from "./config/filter-config.js";
 import { createAlerter } from "./alerts/index.js";
 
 async function main() {
@@ -111,6 +113,7 @@ async function main() {
     if (!solUsd) return;
     exitEngine.onCurveTrade(mint, priceSol * solUsd, virtualSol * solUsd);
   });
+  launchTracker.on("complete", (mint) => exitEngine.onCurveComplete(mint));
   const alerter = createAlerter({ store: positionStore, circuit, pnl });
 
   // What the last run left open carries on; what it closed stays in the totals.
@@ -126,27 +129,60 @@ async function main() {
   // Synthetic pools carry their answers and are judged at once.
   // Bumped by a stats reset: a pool detected before it is not judged after it.
   let statsGeneration = 0;
-  // In breakout mode a pump.fun launch waits here until its curve breaks out.
+  // In breakout, curve-fill and copy mode a pump.fun launch waits here until
+  // the tracker says its moment has come.
   const awaitingBreakout = new Map<string, { event: PoolEvent; generation: number; at: number }>();
-  const breakoutMode = env.ENTRY_MODE === "breakout";
+  const breakoutMode = env.ENTRY_MODE !== "delay";
   if (breakoutMode) {
-    launchTracker.setBreakoutRule({
-      multiple: env.BREAKOUT_MULTIPLE,
-      minAgeSec: env.BREAKOUT_MIN_AGE_SEC,
-      minBuySol: env.BREAKOUT_MIN_BUY_SOL,
-      maxDevSoldPct: env.BREAKOUT_MAX_DEV_SOLD_PCT,
-    });
-    launchTracker.on("breakout", (mint) => {
+    if (env.ENTRY_MODE === "copy") {
+      const wallets = loadCopyWallets(env.COPY_WALLETS_FILE);
+      const strongAt = Math.max(env.COPY_STRONG_WALLETS, env.COPY_MIN_WALLETS);
+      launchTracker.setCopyRule({ wallets: new Set(wallets.keys()), minWallets: env.COPY_MIN_WALLETS, strongWallets: strongAt });
+      const checklistPreset = BUILT_IN_PRESETS.find((p) => p.name === env.COPY_CHECKLIST_PRESET);
+      if (env.COPY_CHECKLIST_PRESET && !checklistPreset) {
+        logger.warn({ preset: env.COPY_CHECKLIST_PRESET }, "no such preset for the copy checklist — using every default filter");
+      }
+      const checklist = { ...resolveDelta(checklistPreset?.config), minFilterScore: env.COPY_CHECKLIST_MIN_SCORE };
+      // Fewer wallets buy on the checklist and stay waiting, so a later strong signal
+      // can still buy; the trader holds a coin at most once.
+      launchTracker.on("copy", (mint, buyers) => {
+        const waiting = awaitingBreakout.get(mint);
+        if (!waiting || waiting.generation !== statsGeneration) return;
+        const strong = buyers.length >= strongAt;
+        if (strong) awaitingBreakout.delete(mint);
+        logger.info(
+          { mint: mint.slice(0, 8), wallets: buyers.map((w) => wallets.get(w) || w.slice(0, 6)) },
+          strong
+            ? `${buyers.length} copied wallets in — judging on the active preset`
+            : `${buyers.length} copied wallet(s) in — judging on the checklist, min score ${env.COPY_CHECKLIST_MIN_SCORE}`,
+        );
+        trader.cachePool(waiting.event);
+        void orchestrator.evaluate(waiting.event, strong ? {} : { configOverride: checklist });
+      });
+    } else if (env.ENTRY_MODE === "breakout") {
+      launchTracker.setBreakoutRule({
+        multiple: env.BREAKOUT_MULTIPLE,
+        minAgeSec: env.BREAKOUT_MIN_AGE_SEC,
+        minBuySol: env.BREAKOUT_MIN_BUY_SOL,
+        maxDevSoldPct: env.BREAKOUT_MAX_DEV_SOLD_PCT,
+      });
+    } else {
+      launchTracker.setFillRule(env.CURVE_FILL_PCT);
+    }
+    const judgeNow = (mint: string, why: string) => {
       const waiting = awaitingBreakout.get(mint);
       if (!waiting) return;
       awaitingBreakout.delete(mint);
       if (waiting.generation !== statsGeneration) return;
-      logger.info({ mint: mint.slice(0, 8), ageSec: Math.round((Date.now() - waiting.at) / 1000) }, "breakout — judging now");
+      logger.info({ mint: mint.slice(0, 8), ageSec: Math.round((Date.now() - waiting.at) / 1000) }, `${why} — judging now`);
       trader.cachePool(waiting.event);
       void orchestrator.evaluate(waiting.event);
-    });
+    };
+    launchTracker.on("breakout", (mint) => judgeNow(mint, "breakout"));
+    launchTracker.on("fill", (mint) => judgeNow(mint, `curve ${env.CURVE_FILL_PCT}% sold`));
     setInterval(() => {
-      const cutoff = Date.now() - 20 * 60_000;
+      // the tracker's breakout window is 15 minutes, its fill window 25, its copy window 30
+      const cutoff = Date.now() - 31 * 60_000;
       for (const [mint, w] of awaitingBreakout) if (w.at < cutoff) awaitingBreakout.delete(mint);
     }, 60_000).unref();
   }

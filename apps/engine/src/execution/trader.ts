@@ -26,6 +26,8 @@ export class Trader {
   private readonly recentEntries: number[] = [];
   // entries past every check, waiting for their market price
   private pendingEntries = 0;
+  // mints being bought right now; with the open positions, a coin is held at most once
+  private readonly enteringMints = new Set<string>();
   private skippedFull = 0;
   private skippedRate = 0;
   private skippedExposure = 0;
@@ -132,6 +134,12 @@ export class Trader {
       return;
     }
 
+    // copy mode can judge a coin twice: at its first copied wallet and again at the third
+    if (this.enteringMints.has(pool.tokenMint) || this.store.list().some((p) => p.tokenMint === pool.tokenMint)) {
+      log.info({ mint: pool.tokenMint.slice(0, 8) }, "already holding this coin — not buying it twice");
+      return;
+    }
+
     if (this.store.count() + this.pendingEntries >= env.MAX_CONCURRENT_POSITIONS) {
       this.skippedFull++;
       return;
@@ -162,6 +170,7 @@ export class Trader {
     // all slip through the checks above; give it back if nothing opens.
     this.recentEntries.push(now);
     this.pendingEntries++;
+    this.enteringMints.add(pool.tokenMint);
     let opened = false;
     try {
       opened = await this.open(verdict, pool, sizeUsd);
@@ -169,6 +178,7 @@ export class Trader {
       log.error({ err, mint: pool.tokenMint.slice(0, 8) }, "entry failed");
     } finally {
       this.pendingEntries--;
+      this.enteringMints.delete(pool.tokenMint);
       if (!opened) {
         const i = this.recentEntries.lastIndexOf(now);
         if (i >= 0) this.recentEntries.splice(i, 1);
@@ -179,6 +189,11 @@ export class Trader {
   private async open(verdict: OrchestratorVerdict, pool: PoolEvent, sizeUsd: number): Promise<boolean> {
     const synthetic = isSyntheticPool(pool);
     if (!synthetic && (await this.fadedSinceVerdict(pool))) return false;
+    // sold out while the filters ran: the curve takes no more buys
+    if (pool.source === "pumpfun" && launchTracker.curveState(pool.tokenMint)?.complete) {
+      log.info({ mint: pool.tokenMint.slice(0, 8) }, "curve completed before the buy — not trading it");
+      return false;
+    }
     let market: EntryMarket | undefined;
     if (!synthetic) {
       market = (await this.curveEntry(pool, sizeUsd)) ?? undefined;

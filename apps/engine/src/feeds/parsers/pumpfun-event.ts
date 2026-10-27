@@ -4,6 +4,7 @@ import { SOL_MINT } from "./common.js";
 // sha256("event:<name>")[0..8], as in pump's IDL
 const CREATE_EVENT_DISCRIMINATOR = Buffer.from([27, 114, 169, 77, 222, 235, 99, 118]);
 const TRADE_EVENT_DISCRIMINATOR = Buffer.from([189, 219, 127, 211, 78, 230, 97, 238]);
+const COMPLETE_EVENT_DISCRIMINATOR = Buffer.from([95, 114, 97, 156, 212, 46, 152, 8]);
 const PROGRAM_DATA = "Program data: ";
 // bonding_curve.quote_mint for a SOL-paired coin
 const DEFAULT_PUBKEY = "11111111111111111111111111111111";
@@ -153,6 +154,21 @@ export function decodeTradeEvents(logs: readonly string[]): PumpTradeEvent[] {
     });
   }
   return trades;
+}
+
+/**
+ * The mints whose bonding curve a transaction completed (CompleteEvent: user,
+ * mint, ...). A complete curve takes no more trades; the coin migrates to PumpSwap.
+ */
+export function decodeCompleteEvents(logs: readonly string[]): string[] {
+  const mints: string[] = [];
+  for (const line of logs) {
+    if (!line.startsWith(PROGRAM_DATA)) continue;
+    const data = Buffer.from(line.slice(PROGRAM_DATA.length), "base64");
+    if (data.length < 72 || !data.subarray(0, 8).equals(COMPLETE_EVENT_DISCRIMINATOR)) continue;
+    mints.push(new PublicKey(data.subarray(40, 72)).toBase58());
+  }
+  return mints;
 }
 
 /** Traded against SOL, rather than USDC or another pump coin. */

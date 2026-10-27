@@ -6,14 +6,15 @@ rule over thousands of them at once, on the real price path, gaps included.
 
 | File | What it does |
 | --- | --- |
-| `recorder.ts` | Subscribes to pump.fun's logs on Helius (standard WebSocket, no RPC calls) and appends every create and every trade of a coin's first 40 minutes to a JSONL file. |
+| `recorder.ts` | Subscribes to pump.fun's and PumpSwap's logs (public Solana WebSocket by default, so the bot keeps the Helius quota; no RPC calls) and appends every create and every trade of a coin's first 40 minutes to a JSONL file. A curve that gets 50% sold is followed for 3 hours: its completion (`x`), its migration to a PumpSwap pool (`g`) and that pool's trades (`a`, with the reserves before the trade; spot price = (`pq` + `vq`) / `pb`). |
+| `record.sh` | Runs the recorder until Ctrl+C, restarting it when the public stream goes quiet. About 70 MB an hour. |
 | `sim.py` | Features at an entry time (curve gain over launch, buyers, net SOL in the last 30s, dev sold, launch-slot holdings, top holders, drawdown from peak) and the bot's exits replayed on the trades that followed: TP ladder, stop-loss, break-even after TP1, trailing stop, dead coin, time exits. Fees and curve price impact on both sides. |
 | `search2.py` | Entries at a fixed time (30/60/90s) or at a breakout (first trade at 1.5–4× the start price, 5s+ after the create, 2s latency), under several exit sets, searched over pairs of feature thresholds. Ranks by the worse of two time halves. |
 | `oos.py` | Scores rules fixed in a `preregistered_*.json` only on launches created after the file's timestamp. |
 
 ```bash
-# record (leave running for hours; ~40 MB an hour)
-./apps/engine/node_modules/.bin/tsx research/recorder.ts research/launches.jsonl
+# record (leave running for hours)
+research/record.sh research/migrations.jsonl
 
 # search, then test a fixed set of rules on launches recorded after it
 python3 -m venv research/.venv && research/.venv/bin/pip install numpy

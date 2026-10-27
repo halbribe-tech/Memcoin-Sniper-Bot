@@ -180,6 +180,45 @@ describe("exits on market prices", () => {
     assert.equal(store.list()[0]?.status, "partial", "+60% on the curve took TP1, though the poll said +0%");
   });
 
+  test("with EXIT_ON_MIGRATION a completed curve sells at the first market price after the move", async () => {
+    const mutable = env as { EXIT_ON_MIGRATION: boolean };
+    const before = mutable.EXIT_ON_MIGRATION;
+    mutable.EXIT_ON_MIGRATION = true;
+    try {
+      const { store, feed, tick, setPrice, engine } = setup(MIN, 1.0);
+      await feed.poll();
+      engine.onCurveTrade("MINT", 1.1, 50_000);
+      engine.onCurveComplete("MINT");
+      tick();
+      assert.equal(store.count(), 1, "the polled price is from before the PumpSwap pool opened");
+      later(6_000, () => setPrice(0.9));
+      await feed.poll();
+      later(6_000, tick);
+      assert.equal(store.count(), 0);
+      const closed = store.recentlyClosed(1)[0];
+      assert.equal(closed?.closeReason, "migration");
+      assert.ok((closed?.realizedPnlUsd ?? 0) < 0, "sold at the PumpSwap price, not the curve's last");
+    } finally {
+      mutable.EXIT_ON_MIGRATION = before;
+    }
+  });
+
+  test("without EXIT_ON_MIGRATION a completed curve keeps its position", async () => {
+    const mutable = env as { EXIT_ON_MIGRATION: boolean };
+    const before = mutable.EXIT_ON_MIGRATION;
+    mutable.EXIT_ON_MIGRATION = false;
+    try {
+      const { store, feed, tick, setPrice, engine } = setup(MIN, 1.0);
+      engine.onCurveComplete("MINT");
+      later(6_000, () => setPrice(1.1));
+      await feed.poll();
+      later(6_000, tick);
+      assert.equal(store.count(), 1);
+    } finally {
+      mutable.EXIT_ON_MIGRATION = before;
+    }
+  });
+
   test("trades on other coins leave a position alone", () => {
     const { store, engine } = setup(MIN, null);
     engine.onCurveTrade("OTHER", 0.1, 50_000);

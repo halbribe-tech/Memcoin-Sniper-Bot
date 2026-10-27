@@ -10,6 +10,9 @@ import { PUMPFUN_START_PRICE_SOL } from "../feeds/parsers/pumpfun.js";
 
 // a curve price older than this falls back to the polled market price
 const CURVE_FRESH_MS = 15_000;
+// the PumpSwap pool opens a moment after the curve completes; a market price
+// fetched sooner is still the curve's
+const MIGRATION_SETTLE_MS = 5_000;
 const log = childLogger("exit-engine");
 
 const TP_REASONS: ExitReason[] = ["tp1", "tp2", "tp3", "tp4"];
@@ -46,6 +49,8 @@ export class ExitEngine {
   private readonly atCurveStartSince = new Map<string, number>();
   // mint → the curve's price from the last trade the log stream delivered
   private readonly curve = new Map<string, { priceUsd: number; liquidityUsd: number; at: number }>();
+  // mint → when its curve completed, for positions that exit on the migration
+  private readonly migratedAt = new Map<string, number>();
   private rugBroadcasts = 0;
   private partialFills = 0;
   private fullCloses = 0;
@@ -89,6 +94,18 @@ export class ExitEngine {
     }
   }
 
+  /**
+   * A curve sold out: its coin moves to PumpSwap and its curve price stops.
+   * From here the polled market price prices the position, and with
+   * EXIT_ON_MIGRATION it is sold at the first one fetched after the move.
+   */
+  onCurveComplete(mint: string): void {
+    if (!this.store.list().some((p) => p.tokenMint === mint)) return;
+    this.curve.delete(mint);
+    this.migratedAt.set(mint, Date.now());
+    log.info({ mint: mint.slice(0, 8) }, "curve complete — migrating to PumpSwap");
+  }
+
   start(): void {
     if (this.timer) return;
     this.timer = setInterval(() => this.tick(), this.tickMs);
@@ -125,6 +142,7 @@ export class ExitEngine {
     }
     const open = new Set(this.store.list().map((p) => p.tokenMint));
     for (const mint of this.curve.keys()) if (!open.has(mint)) this.curve.delete(mint);
+    for (const mint of this.migratedAt.keys()) if (!open.has(mint)) this.migratedAt.delete(mint);
   }
 
   /** One position against its price now: take a profit, close it, or hold. */
@@ -144,6 +162,9 @@ export class ExitEngine {
     let decision = this.evaluate(updated, simElapsed, m.rugAt);
     if (decision.kind === "none" && this.isDeadOnCurve(rec, now)) {
       decision = { kind: "full-close", reason: "dead-coin" };
+    }
+    if (decision.kind !== "full-close" && this.pricedAfterMigration(rec)) {
+      decision = { kind: "full-close", reason: "migration" };
     }
     if (decision.kind === "partial-tp") {
       this.partialFills++;
@@ -174,6 +195,13 @@ export class ExitEngine {
       return;
     }
     if (notify) this.store.emitUpdate(updated.id);
+  }
+
+  private pricedAfterMigration(rec: PositionRecord): boolean {
+    if (!env.EXIT_ON_MIGRATION || rec.profile) return false;
+    const since = this.migratedAt.get(rec.position.tokenMint);
+    const q = this.market?.get(rec.position.tokenMint);
+    return since !== undefined && q !== undefined && q.at >= since + MIGRATION_SETTLE_MS;
   }
 
   /**

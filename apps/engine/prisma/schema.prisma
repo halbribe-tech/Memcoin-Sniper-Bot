@@ -53,6 +53,7 @@ enum ExitReason {
   trailing_stop
   time_exit
   dead_coin
+  migration
   rug_pull
   kill_switch
   manual

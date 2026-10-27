@@ -50,26 +50,30 @@ class FilterConfigStore extends EventEmitter {
   }
 
   resolve(): ResolvedFilterConfig {
-    const d = this.active?.delta;
-    const t = d?.thresholds ?? {};
-    const enabledMap = d?.enabled ?? {};
-    return {
-      enabled: (id) => enabledMap[id] ?? filterOnByDefault(id),
-      liquidityMinUsd: t.liquidityMinUsd ?? env.FILTER_LIQUIDITY_MIN_USD,
-      liquidityMaxUsd: t.liquidityMaxUsd ?? env.FILTER_LIQUIDITY_MAX_USD,
-      lpLockedRequired: t.lpLockedRequired ?? env.FILTER_LP_LOCKED_REQUIRED,
-      mintAuthRenounced: t.mintAuthRenounced ?? env.FILTER_MINT_AUTH_RENOUNCED,
-      freezeAuthRenounced: t.freezeAuthRenounced ?? env.FILTER_FREEZE_AUTH_RENOUNCED,
-      topHolderMaxPct: t.topHolderMaxPct ?? env.FILTER_TOP_HOLDER_MAX_PCT,
-      top10HoldersMaxPct: t.top10HoldersMaxPct ?? env.FILTER_TOP_10_HOLDERS_MAX_PCT,
-      devRugRateMax: t.devRugRateMax ?? env.FILTER_DEV_RUG_RATE_MAX,
-      honeypotSimRequired: t.honeypotSimRequired ?? env.FILTER_HONEYPOT_SIM_REQUIRED,
-      maxSellTaxPct: t.maxSellTaxPct ?? env.FILTER_MAX_SELL_TAX_PCT,
-      bundledLaunchReject: t.bundledLaunchReject ?? env.FILTER_BUNDLED_LAUNCH_REJECT,
-      curveGainMinPct: t.curveGainMinPct ?? env.FILTER_CURVE_GAIN_MIN_PCT,
-      minFilterScore: t.minFilterScore ?? env.FILTER_MIN_FILTER_SCORE,
-    };
+    return resolveDelta(this.active?.delta);
   }
+}
+
+/** A preset's delta over the env defaults; no delta gives the defaults, every filter on but those off by default. */
+export function resolveDelta(d: FilterConfigDelta | undefined): ResolvedFilterConfig {
+  const t = d?.thresholds ?? {};
+  const enabledMap = d?.enabled ?? {};
+  return {
+    enabled: (id) => enabledMap[id] ?? filterOnByDefault(id),
+    liquidityMinUsd: t.liquidityMinUsd ?? env.FILTER_LIQUIDITY_MIN_USD,
+    liquidityMaxUsd: t.liquidityMaxUsd ?? env.FILTER_LIQUIDITY_MAX_USD,
+    lpLockedRequired: t.lpLockedRequired ?? env.FILTER_LP_LOCKED_REQUIRED,
+    mintAuthRenounced: t.mintAuthRenounced ?? env.FILTER_MINT_AUTH_RENOUNCED,
+    freezeAuthRenounced: t.freezeAuthRenounced ?? env.FILTER_FREEZE_AUTH_RENOUNCED,
+    topHolderMaxPct: t.topHolderMaxPct ?? env.FILTER_TOP_HOLDER_MAX_PCT,
+    top10HoldersMaxPct: t.top10HoldersMaxPct ?? env.FILTER_TOP_10_HOLDERS_MAX_PCT,
+    devRugRateMax: t.devRugRateMax ?? env.FILTER_DEV_RUG_RATE_MAX,
+    honeypotSimRequired: t.honeypotSimRequired ?? env.FILTER_HONEYPOT_SIM_REQUIRED,
+    maxSellTaxPct: t.maxSellTaxPct ?? env.FILTER_MAX_SELL_TAX_PCT,
+    bundledLaunchReject: t.bundledLaunchReject ?? env.FILTER_BUNDLED_LAUNCH_REJECT,
+    curveGainMinPct: t.curveGainMinPct ?? env.FILTER_CURVE_GAIN_MIN_PCT,
+    minFilterScore: t.minFilterScore ?? env.FILTER_MIN_FILTER_SCORE,
+  };
 }
 
 export const filterConfig = new FilterConfigStore();

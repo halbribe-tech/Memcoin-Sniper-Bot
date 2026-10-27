@@ -144,6 +144,7 @@ export class FilterOrchestrator extends EventEmitter {
       {
         decision: verdict.decision.toUpperCase(),
         score: `${verdict.totalScore}/${verdict.maxScore}`,
+        reason: verdict.decisionReason,
         passed: verdict.passedCount,
         failed: verdict.failedCount,
         source: pool.source,

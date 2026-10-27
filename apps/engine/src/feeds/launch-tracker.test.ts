@@ -2,7 +2,7 @@ import { after, describe, test } from "node:test";
 import assert from "node:assert/strict";
 import { Keypair, PublicKey } from "@solana/web3.js";
 import type { PoolEvent } from "@sniperbot/shared";
-import { LaunchTracker, launchTracker } from "./launch-tracker.js";
+import { curveFillPct, LaunchTracker, launchTracker } from "./launch-tracker.js";
 import { decodePumpCreateEvent } from "./parsers/pumpfun-event.js";
 import { bundledLaunchFilter } from "../filters/bundled-launch.js";
 import type { FilterContext } from "../filters/types.js";
@@ -20,7 +20,12 @@ const SLOT = 1000;
 const M = 1_000_000n; // 1 token in raw units
 
 /** A TradeEvent log line, laid out as pump's IDL writes it. */
-function trade(user: string, isBuy: boolean, tokens: bigint, opts: { priceX?: number; sol?: number } = {}): string[] {
+function trade(
+  user: string,
+  isBuy: boolean,
+  tokens: bigint,
+  opts: { priceX?: number; sol?: number; fillPct?: number } = {},
+): string[] {
   const b = Buffer.alloc(113);
   Buffer.from([189, 219, 127, 211, 78, 230, 97, 238]).copy(b, 0);
   decodeKey(MINT).copy(b, 8);
@@ -28,9 +33,25 @@ function trade(user: string, isBuy: boolean, tokens: bigint, opts: { priceX?: nu
   b.writeBigUInt64LE(tokens * M, 48);
   b[56] = isBuy ? 1 : 0;
   decodeKey(user).copy(b, 57);
-  // reserves putting the curve at priceX × its start (30 SOL / 1.073B tokens)
-  b.writeBigUInt64LE(BigInt(Math.round(30e9 * (opts.priceX ?? 1))), 97);
-  b.writeBigUInt64LE(1_073_000_000_000_000n, 105);
+  if (opts.fillPct !== undefined) {
+    // reserves with fillPct% of the 793.1M sellable tokens bought, on the constant product
+    const vtr = 1_073_000_000_000_000n - BigInt(Math.round(opts.fillPct * 7_931_000_000_000));
+    b.writeBigUInt64LE((30_000_000_000n * 1_073_000_000_000_000n) / vtr, 97);
+    b.writeBigUInt64LE(vtr, 105);
+  } else {
+    // reserves putting the curve at priceX × its start (30 SOL / 1.073B tokens)
+    b.writeBigUInt64LE(BigInt(Math.round(30e9 * (opts.priceX ?? 1))), 97);
+    b.writeBigUInt64LE(1_073_000_000_000_000n, 105);
+  }
+  return [`Program data: ${b.toString("base64")}`];
+}
+
+/** A CompleteEvent log line: user, mint, bonding curve, timestamp, quote mint. */
+function complete(mint: string): string[] {
+  const b = Buffer.alloc(8 + 32 + 32 + 32 + 8 + 32);
+  Buffer.from([95, 114, 97, 156, 212, 46, 152, 8]).copy(b, 0);
+  decodeKey(wallet()).copy(b, 8);
+  decodeKey(mint).copy(b, 40);
   return [`Program data: ${b.toString("base64")}`];
 }
 const decodeKey = (key: string) => Buffer.from(new PublicKey(key).toBytes());
@@ -139,6 +160,104 @@ describe("breakouts", () => {
     t.on("breakout", (m) => fired.push(m));
     t.ingest(CREATE_WITH_DEV_BUY, SLOT, 0);
     t.ingest(trade(wallet(), true, 10n, { priceX: 3, sol: 40 }), SLOT + 20, 8_000);
+    assert.deepEqual(fired, []);
+  });
+});
+
+describe("curve fill", () => {
+  function tracker(pct: number | null = 90) {
+    const t = new LaunchTracker();
+    t.setFillRule(pct);
+    const fired: string[] = [];
+    const completed: string[] = [];
+    t.on("fill", (m) => fired.push(m));
+    t.on("complete", (m) => completed.push(m));
+    t.ingest(CREATE_WITH_DEV_BUY, SLOT, 0);
+    return { t, fired, completed };
+  }
+
+  test("fires once when the curve is first 90% sold, after 5s", () => {
+    const { t, fired } = tracker();
+    t.ingest(trade(wallet(), true, 10n, { fillPct: 91 }), SLOT + 5, 3_000);
+    assert.deepEqual(fired, [], "91% sold, but only 3s old");
+    t.ingest(trade(wallet(), true, 10n, { fillPct: 85 }), SLOT + 10, 6_000);
+    assert.deepEqual(fired, [], "85% is short of the rule");
+    t.ingest(trade(wallet(), true, 10n, { fillPct: 92 }), SLOT + 20, 8_000);
+    assert.deepEqual(fired, [MINT]);
+    t.ingest(trade(wallet(), true, 10n, { fillPct: 95 }), SLOT + 30, 9_000);
+    assert.deepEqual(fired, [MINT], "a launch fills once");
+  });
+
+  test("not on a sold-out curve, not after 25 minutes, not without a rule", () => {
+    const soldOut = tracker();
+    soldOut.t.ingest(trade(wallet(), true, 10n, { fillPct: 100 }), SLOT + 20, 8_000);
+    assert.deepEqual(soldOut.fired, []);
+
+    const late = tracker();
+    late.t.ingest(trade(wallet(), true, 10n, { fillPct: 92 }), SLOT + 20, 26 * 60_000);
+    assert.deepEqual(late.fired, []);
+
+    const off = tracker(null);
+    off.t.ingest(trade(wallet(), true, 10n, { fillPct: 92 }), SLOT + 20, 8_000);
+    assert.deepEqual(off.fired, []);
+  });
+
+  test("a CompleteEvent marks the curve complete and is passed on for any mint", () => {
+    const { t, completed } = tracker();
+    const other = wallet();
+    t.ingest([...trade(wallet(), true, 10n, { fillPct: 100 }), ...complete(MINT)], SLOT + 20, 8_000);
+    t.ingest(complete(other), SLOT + 21, 9_000);
+    assert.equal(t.curveState(MINT)?.complete, true);
+    assert.deepEqual(completed, [MINT, other]);
+  });
+
+  test("curveFillPct reads the share of the sellable supply bought", () => {
+    assert.equal(curveFillPct(1_073_000_000_000_000n), 0);
+    assert.ok(Math.abs(curveFillPct(279_900_000_000_000n) - 100) < 1e-9);
+  });
+});
+
+describe("copy wallets", () => {
+  const followed = [wallet(), wallet(), wallet()];
+  function tracker(minWallets = 3) {
+    const t = new LaunchTracker();
+    t.setCopyRule({ wallets: new Set(followed), minWallets });
+    const fired: Array<[string, string[]]> = [];
+    t.on("copy", (m, w) => fired.push([m, w]));
+    t.ingest(CREATE_WITH_DEV_BUY, SLOT, 0);
+    return { t, fired };
+  }
+
+  test("fires once when the third followed wallet buys, naming them", () => {
+    const { t, fired } = tracker();
+    t.ingest(trade(followed[0]!, true, 10n), SLOT + 2, 1_000);
+    t.ingest(trade(wallet(), true, 10n), SLOT + 3, 2_000);
+    t.ingest(trade(followed[0]!, true, 10n), SLOT + 4, 3_000);
+    t.ingest(trade(followed[1]!, true, 10n), SLOT + 5, 4_000);
+    assert.deepEqual(fired, [], "two different followed wallets, one of them twice");
+    t.ingest(trade(followed[2]!, true, 10n), SLOT + 6, 5_000);
+    assert.deepEqual(fired, [[MINT, followed]]);
+    t.ingest(trade(wallet(), true, 10n), SLOT + 7, 6_000);
+    assert.equal(fired.length, 1);
+  });
+
+  test("with a strong count above the minimum, every new followed buyer up to it is a signal", () => {
+    const t = new LaunchTracker();
+    t.setCopyRule({ wallets: new Set(followed), minWallets: 1, strongWallets: 3 });
+    const counts: number[] = [];
+    t.on("copy", (_m, w) => counts.push(w.length));
+    t.ingest(CREATE_WITH_DEV_BUY, SLOT, 0);
+    for (const [i, w] of [followed[0]!, followed[0]!, followed[1]!, followed[2]!, wallet()].entries()) {
+      t.ingest(trade(w, true, 10n), SLOT + 2 + i, 1_000 + i);
+    }
+    assert.deepEqual(counts, [1, 2, 3]);
+  });
+
+  test("buys in the create slot, sells, and buys after 30 minutes do not count", () => {
+    const { t, fired } = tracker(2);
+    t.ingest(trade(followed[0]!, true, 10n), SLOT, 0);
+    t.ingest(trade(followed[1]!, false, 10n), SLOT + 2, 1_000);
+    t.ingest(trade(followed[2]!, true, 10n), SLOT + 3, 31 * 60_000);
     assert.deepEqual(fired, []);
   });
 });
